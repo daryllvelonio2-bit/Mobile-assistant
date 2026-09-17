@@ -1,0 +1,29 @@
+# Environment
+.env
+.env.local
+.env.production
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / gradle
+.gradle/
+/local.properties
+/.aab/
+/.apk/
+/build/
+
+# Keystore / signing (personal, never commit)
+*.jks
+*.keystore
+*.key
+*.p12
+*.pem
