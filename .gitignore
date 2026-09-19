@@ -1,29 +1,32 @@
-# Environment
-.env
-.env.local
-.env.production
+# Built application files
+*.apk
+*.aar
+*.aab
 
-# IDE
+# Generated files
+bin/
+gen/
+out/
+build/
+app/build/
+**/build/
+
+# Gradle files
+.gradle/
+
+# Local configuration file (sdk.path, etc.)
+local.properties
+
+# Log files
+*.log
+
+# Android Studio generated files
 .idea/
 *.iml
-.vscode/
-*.swp
-*.swo
-
-# OS
 .DS_Store
-Thumbs.db
+.cxx/
+.externalNativeBuild/
 
-# Build / gradle
-.gradle/
-/local.properties
-/.aab/
-/.apk/
-/build/
-
-# Keystore / signing (personal, never commit)
-*.jks
-*.keystore
-*.key
-*.p12
-*.pem
+# Python / temp files
+*.pyc
+monitor.py

@@ -31,3 +31,4 @@
 14. **Project Work-Tree Maintenance (`TREE.md`):**
     - Always maintain and update `TREE.md` whenever new files, directories, modules, or components are added, removed, or restructured in the repository.
     - Ensure `TREE.md` accurately reflects the project structure so main and subagents have immediate visibility into code layout without redundant file-tree scanning.
+15. **Version Increment:** Always increment the application version by `0.1.0` (and version code by `+1`) on every update or change.

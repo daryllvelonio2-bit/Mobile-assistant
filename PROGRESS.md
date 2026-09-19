@@ -1,12 +1,63 @@
 # Project Progress (`PROGRESS.md`)
 
 ## Status Overview
-- **Current Phase:** Phase 0 (Stack Decision & Planning / Initial Setup)
+- **Current Phase:** Phase 4 (Character skin v2) — **Completed & Verified**
 - **Last Updated:** 2026-09-19
-- **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md
+- **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
 - **2026-09-19:** 
   - Initialized project configuration files (`agent.md`, `BUILD_PLAN.md`, `STACK_DECISION.md`, `TREE.md`, `PROGRESS.md`). Tailored guidelines for Kotlin + Jetpack Compose Android development, specialized subagent delegation (`debugger`, `ui/ux expert`), work-tree maintenance, and progress tracking.
   - Added `.env` configuration template for API keys and environment settings (ignored by git).
-  - Updated `TREE.md` to reflect `.env` and `PROGRESS.md`.
+  - Revised `STACK_DECISION.md` API layer: expandable `DecisionProvider` registry + `RoundRobinKeyPool` per provider, provider order config, Keystore storage, rule-based fallback.
+  - Installed CLI toolchain (no Studio): JDK 17, Android cmdline-tools latest, platform-tools, android-34/35 platform, build-tools 34.0.0/35.0.0.
+  - **Completed Phase 1 (Scaffold + Permissions):**
+    - Scaffolded Gradle root & app build scripts, configured AndroidManifest, Room DB, DataStore, Keystore crypto, Decision registry & Gemini provider, M3 theme, Permissions UI, and Settings UI. Verified clean build (`BUILD SUCCESSFUL`).
+  - **Completed Phase 2 (Observation backend):**
+    - Implemented `UsageReader`, `SleepReader`, `BaselineUpdater`, and `ObservationService`. Verified clean compilation (`BUILD SUCCESSFUL`).
+  - **Completed Phase 3 (Decision + Action layer):**
+    - Implemented `ActionExecutor`: handles scheduling 7pm recurring alarms via AlarmManager, toggling screenshot capture state, and logging goals in Room `GoalDao`.
+    - Verified clean compilation and successful debug APK build (`BUILD SUCCESSFUL`).
+  - **Completed Phase 4 (Character skin v2):**
+    - Implemented `CharacterMode` (VANISH/STAY/WANDER), `CharacterController` (pure Decision-to-mode mapping + wander offsets), and `CharacterOverlayService` (TYPE_APPLICATION_OVERLAY bubble, drag-to-move, 4s wander drift, supervisor scope, leak-free remove on hide/destroy).
+    - Implemented `CharacterViewModel` (tone/mode state, render-latest via ProviderRegistry + UsageReader + BaselineUpdater) and `CharacterPanel` (M3 Show/Hide/Render-latest, overlay-permission guard).
+    - Registered overlay service in manifest (specialUse FGS + subtype property), wired `UsageReader`/`BaselineUpdater` into `AppContainer`, added panel to `MainActivity`.
+    - Verified clean `assembleDebug` with zero warnings; APK at `app/build/outputs/apk/debug/app-debug.apk` (12.4M).
+  - **2026-09-19 — Render-latest crash fix (static analysis, no logcat available):**
+    - Root cause: `CharacterViewModel.renderLatest()` launched an unguarded `viewModelScope` coroutine — any throw from `UsageReader` (`SecurityException` without usage-stats grant) or `show()`/`startForegroundService` (FGS start / overlay denial, common on Waydroid) escaped and crashed the app; `CharacterOverlayService.onStartCommand`/`ensureBubble` likewise let `startForeground` and `WindowManager.addView` (`BadToken`/`SecurityException` on Waydroid) propagate and kill the service/process.
+    - Hardened `CharacterViewModel`: `renderLatest` body wrapped in try/catch with new `error: StateFlow<String?>`, usage-stat read moved to `Dispatchers.IO`, `show()` guarded by `canOverlay()` + `runCatching`, `hide()` start wrapped in `runCatching`.
+    - Hardened `CharacterOverlayService`: `onStartCommand` `startForeground` + dispatch body wrapped in `runCatching` with `stopSelf()` (no throw), `ensureBubble` `addView` wrapped in `runCatching` with bubble cleanup + `stopSelf()` on failure.
+    - Surfaced `error` in `CharacterPanel` as `bodySmall` text in `MaterialTheme.colorScheme.error`.
+    - All touched files under 500 lines (VM 99, Panel 64, Service 229), M3 tokens only. Verified `assembleDebug` BUILD SUCCESSFUL, zero Kotlin warnings; APK at `app/build/outputs/apk/debug/app-debug.apk` (12.4M). No reinstall (parent handles).
+  - **2026-09-19 — SavedStateRegistryController restore order fixed:**
+    - Reordered `savedStateController.performRestore(null)` before `ON_CREATE` event in `OverlayLifecycleOwner.attach()` within `CharacterOverlayService.kt` (resolving `You can 'consumeRestoredStateForKey' only after the corresponding component has moved to the 'CREATED' state`).
+    - Version bumped to `0.9.0` (`versionCode` 9) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Updated model in `GeminiProvider.kt` to `"gemini-3.5-flash-lite"`.
+    - Version bumped to `0.8.0` (`versionCode` 8) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Updated Gemini model from deprecated `"gemini-2.0-flash"` to valid `"gemini-1.5-flash"` in `GeminiProvider.kt` (resolving HTTP 404).
+    - Added `savedStateController.performRestore(null)` in `OverlayLifecycleOwner.attach()` within `CharacterOverlayService.kt` (resolving `You can 'consumeRestoredStateForKey' only after the corresponding component has moved to the 'CREATED' state`).
+    - Version bumped to `0.7.0` (`versionCode` 7) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Added `<uses-permission android:name="android.permission.INTERNET" />` and `ACCESS_NETWORK_STATE` to `AndroidManifest.xml` (resolving `EPERM` on debug socket server and network calls).
+    - Added comprehensive debug logging across `CharacterOverlayService` (`onStartCommand`, `ensureBubble`, `addView` success/failure).
+    - Version bumped to `0.6.0` (`versionCode` 6) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Implemented a zero-dependency local HTTP debug server (`AppDebugServer` running on port 8085) capturing all app events, UI clicks, decision calls, API requests, and uncaught crashes in real-time.
+    - Provides a web dashboard at `http://<waydroid-ip>:8085` with auto-refreshing live log stream.
+    - Version bumped to `0.5.0` (`versionCode` 5) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Added secure Gemini API key input field in `SettingsScreen`, backed by encrypted `KeyStoreKeys` in `SettingsViewModel`.
+    - Version bumped to `0.4.0` (`versionCode` 4) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`.
+    - Root cause: `CharacterOverlayService` added a ComposeView via WindowManager without a LifecycleOwner / ViewModelStoreOwner / SavedStateRegistryOwner attached, causing Compose `WindowRecomposer` to throw `IllegalStateException`.
+    - Fix: Added retained `OverlayLifecycleOwner` in `CharacterOverlayService`, setting tags directly on `ComposeView` using lifecycle/viewmodel/savedstate R IDs before `addView`, advancing to RESUMED on add success and DESTROYED on remove/destroy/failure.
+    - Updated AGP to `8.6.1` to align with AndroidX compose metadata requirements.
+    - Version bumped to `0.3.0` (`versionCode` 3) per agent.md rule 15.
+    - Rebuilt `assembleDebug` BUILD SUCCESSFUL, reinstalled on Waydroid via `waydroid app install`, confirmed zero crashes/FATAL exceptions in logcat.
+  - **2026-09-19 — Overlay ComposeView ViewTreeLifecycleOwner crash fix (code fix only, parent builds/verifies):**
+    - Root cause: `CharacterOverlayService.ensureBubble()` created a bare `ComposeView` and added it via `WindowManager.addView` with no `ViewTreeLifecycleOwner`/`ViewModelStoreOwner`/`SavedStateRegistryOwner`, so composition threw `IllegalStateException: ViewTreeLifecycleOwner not found from ComposeView`.
+    - Fix: new retained `OverlayLifecycleOwner` (LifecycleRegistry + ViewModelStore + SavedStateRegistryController implementing LifecycleOwner/ViewModelStoreOwner/SavedStateRegistryOwner); all three `ViewTree*.set(view, owner)` calls happen BEFORE `addView`, lifecycle moves to RESUMED on add success and DESTROYED (store cleared) on `removeBubble`/`onDestroy`/add failure. Existing `runCatching` hardening kept.
+    - Deps: added explicit `lifecycle-runtime`, `lifecycle-viewmodel` (2.8.5) + `savedstate` (1.2.1, corrected from nonexistent 2.8.0) to version catalog + `app/build.gradle.kts`. Each `ViewTree*` import verified present in its declared AAR (classes.jar inspection).
+    - Version bump per agent.md rule 15: `versionCode` 2→3, `versionName` 0.2.0→0.3.0. Service file 281 lines (<500), M3 tokens only. Build/reinstall/logcat verification delegated to parent.

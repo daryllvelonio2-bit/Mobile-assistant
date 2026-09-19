@@ -49,14 +49,14 @@ Reasoning: Doze and OEM battery policy will kill passive background work; if the
 
 Open choice: if you want lighter battery use and are OK with capture only while the app is active or via a scheduled job, we can reconsider. For the described behavior (periodic capture while you use the phone), foreground service is the recommendation.
 
-## API layer (free-tier model)
+## API layer (free-tier models, expandable multi-provider + round-robin)
 
-- Provider: TBD among free-tier options you already have keys for (Gemini free tier was mentioned). Decision: pick one primary provider for v1, with a clearly defined fallback behavior when it is unavailable.
-- Key storage: Android Keystore + EncryptedSharedPreferences (or equivalent) for the API key; do not store it in plain shared prefs.
-- Call shape: JSON over HTTP from the app to the provider; retry with backoff on transient failures; timeout; cache the last good decision if the API is down, with a rule-based fallback for tone/interrupt.
-- Vision: when a screenshot frame is to be processed, send it to the API as part of the decision call (or in a separate vision call, depending on provider shape). Keep v1 simple: one decision round, one call when frames are relevant.
-
-Open choice: which provider. Recommendation: one primary free-tier provider, validated against your own cadence test, not a multi-provider swap on day one.
+- Provider: expandable registry of free-tier providers (Gemini, OpenAI, OpenRouter, Groq, etc.). v1 ships with one working provider, but the interface allows adding more without refactoring callers.
+- Key rotation: round-robin across multiple API keys per provider, then across providers. On 429/quota/transient failure, rotate to next key/provider with backoff; track per-key failure counts and cooldown.
+- Key storage: Android Keystore + EncryptedSharedPreferences (or equivalent) for all API keys; never plain shared prefs. Keys loaded from settings, not hardcoded. `.env` template documents variable names only.
+- Call shape: `DecisionProvider` interface (name, generate(), supportsVision). `ProviderRegistry` holds ordered providers. `RoundRobinKeyPool` per provider. JSON over HTTP; timeout; retry with backoff; cache last good decision; rule-based fallback (baseline-only tone, skip interrupt) when all providers down.
+- Vision: when a screenshot frame is relevant, send it via the current provider's vision call (or separate vision call per provider shape). Keep v1 simple: one decision round, one call.
+- Adding a provider = new `DecisionProvider` implementation + register + keys. No changes to Decision service or Action layer.
 
 ## Permissions (v1)
 
@@ -89,7 +89,7 @@ Keep v1 to the permissions above. Do not add location, contacts, microphone, or 
 - Layered architecture with interfaces at observation/decision/action boundaries; DI kept light (manual or Hilt if you want standard).
 - Room for history/baselines, DataStore for settings, files for frames.
 - Foreground service for observation + capture loop; WorkManager for deferrable maintenance.
-- One primary free-tier API provider, key in Keystore/EncryptedSharedPreferences, retry + fallback when unavailable.
+- Expandable multi-provider API registry with round-robin key rotation, keys in Keystore/EncryptedSharedPreferences, retry + rule-based fallback when all unavailable.
 - v1 permissions: UsageStats, SYSTEM_ALERT_WINDOW, Health Connect/sleep read, MediaProjection (when capture on), alarm + notification permissions as needed.
 
 Confirm or override any of the above, then we scaffold.
