@@ -23,6 +23,10 @@ class SettingsRepository(private val context: Context) {
     val alarmMinute: Flow<Int> =
         context.store.data.map { it[Keys.ALARM_MINUTE] ?: 0 }
 
+    /** Audit F12: presence-only kill switch — disables all interrupts. */
+    val presenceOnly: Flow<Boolean> =
+        context.store.data.map { it[Keys.PRESENCE_ONLY] ?: false }
+
     suspend fun setScreenshotEnabled(enabled: Boolean) {
         context.store.edit { it[Keys.SCREENSHOT] = enabled }
     }
@@ -34,10 +38,15 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    suspend fun setPresenceOnly(enabled: Boolean) {
+        context.store.edit { it[Keys.PRESENCE_ONLY] = enabled }
+    }
+
     private object Keys {
         val SCREENSHOT = booleanPreferencesKey("screenshot_enabled")
         val ALARM_HOUR = intPreferencesKey("alarm_hour")
         val ALARM_MINUTE = intPreferencesKey("alarm_minute")
         val PROVIDER_ORDER = stringPreferencesKey("provider_order")
+        val PRESENCE_ONLY = booleanPreferencesKey("presence_only")
     }
 }

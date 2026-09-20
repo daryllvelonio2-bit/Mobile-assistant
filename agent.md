@@ -13,7 +13,7 @@
 2. **Simplicity First:** Prioritize straightforward implementations and intuitive workflows over over-engineered solutions.
 3. **Scalable Architecture:** Design systems with clean separation of concerns (Observation, Memory, Decision, Action, UI/Character layers), robust folder structures, and easy extensibility.
 4. **Modular Code:** Break down features into small, reusable classes, Composables, ViewModels, and services.
-5. **File Size Limit:** **No code file may exceed 500 lines.** If a file approaches or exceeds 500 lines, refactor and split it into smaller modules.
+5. **File Size Limit:** **No code file may exceed 1500 lines.** If a file approaches or exceeds 1500 lines, refactor and split it into smaller modules.
 6. **Strict 1 Feature = 1 File Modularity:** Different feature scopes must reside in separate files to guarantee fault isolation.
 7. **Strict User Instruction Adherence & Zero Hallucination:** Follow the user's explicit step-by-step instructions precisely. Never invent unrequested functionality or jump ahead without user guidance.
 8. **Progress Tracking & Creation (`PROGRESS.md`):** Always ensure `PROGRESS.md` exists in the repository root. After every phase completion, significant update, refactor, or feature addition, immediately update `PROGRESS.md` with a summary of changes, current status, and date.

@@ -22,7 +22,17 @@ class CharacterViewModel(
     private val registry: ProviderRegistry,
     private val usageReader: UsageReader,
     private val baselineUpdater: BaselineUpdater,
+    private val episodeDao: com.shiina.mobile.data.db.MemoryEpisodeDao? = null,
 ) : ViewModel() {
+
+    private val _rememberedDays = MutableStateFlow(0)
+    val rememberedDays: StateFlow<Int> = _rememberedDays
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { _rememberedDays.value = episodeDao?.distinctDayCount() ?: 0 }
+        }
+    }
 
     private val _tone = MutableStateFlow("calm")
     val tone: StateFlow<String> = _tone
@@ -96,6 +106,7 @@ class CharacterViewModel(
                         goalsDone = 0,
                         goalsMissed = 0,
                     ),
+                    source = "render",
                 )
                 com.shiina.mobile.debug.AppDebugServer.log("DECISION", "Decision received: tone=${decision.tone}, interrupt=${decision.interrupt}")
                 _tone.value = decision.tone

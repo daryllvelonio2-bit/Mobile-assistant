@@ -23,18 +23,24 @@ Mobile-assistant/
                 ├── CompanionApp.kt # Application container initialization
                 ├── MainActivity.kt # Main entry point (Permissions & Settings UI)
                 ├── data/
-                │   ├── db/         # Room Database, DAOs, and Entities (Usage, Sleep, Goal, Baseline)
+                │   ├── db/         # Room Database, DAOs, Entities (Usage, Sleep, Goal, Baseline,
+                │   │               #   MemoryEpisode, MemoryFact, ChatTurn, MemorySummary) + migrations v1..v6
                 │   ├── security/   # EncryptedSharedPreferences Keystore key management
                 │   └── settings/   # DataStore settings repository
-                ├── action/         # Local action executor (alarms, screenshot toggle, goal logs)
+                ├── action/         # Executor (+LEARN_FACT/SEARCH_WEB/TAKE_SCREENSHOT verbs, WebSearch) + AlarmReceiver (daily 7PM decide+render)
                 ├── character/      # Overlay character (mode, controller, overlay service)
-                ├── decision/       # Decision models, provider interface, registry, and Gemini round-robin provider
-                ├── observation/    # Foreground observation service stub
+                ├── decision/       # Decision models, provider interface, registry (episode log + cooldown),
+                │   │               #   Gemini round-robin provider, MemoryContext (ranked recall + digests),
+                │   │               #   ShiinaPrompts (global rules + one active mood block)
+                ├── debug/          # AppDebugServer, JSON API dashboard + DebugTalkService notification panel
+                ├── memory/         # MemoryStore (facts CRUD/contradict/forget), MemoryCompactor
+                │                   #   (extract-then-delete weekly digests), NightlyReflection (adaptation pass)
+                ├── observation/    # Foreground observation service stub + MemoryOutcomes (episode signals)
                 ├── theme/          # Material 3 Theme, Colors, and Typography
                 ├── ui/
-                │   ├── character/  # Character ViewModel and M3 control panel
+                │   ├── character/  # Character ViewModel ("remembers N days") and M3 control panel
                 │   ├── permissions/# Permission check helpers and settings-directed grant screen
-                │   └── settings/   # Settings ViewModel and Compose UI
-                └── work/           # WorkManager baseline worker stub
+                │   └── settings/   # Settings ViewModel/UI + MemoryPanel (status, facts viewer, digests, forget all)
+                └── work/           # BaselineWorker (runs NightlyReflection, charger-idle periodic)
 ```
 *(Note: Update this tree immediately whenever files, modules, or directories are added, removed, or restructured.)*

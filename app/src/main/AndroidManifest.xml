@@ -12,6 +12,7 @@
 
     <!-- Alarms + foreground observation. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -40,5 +41,28 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Overlay character driven by on-device decision output." />
         </service>
+        <service
+            android:name=".debug.DebugTalkService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent notification debug panel with text talk." />
+        </service>
+        <receiver
+            android:name=".action.AlarmReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.shiina.mobile.ACTION_ALARM_TRIGGER" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".action.ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.shiina.mobile.ACTION_REMINDER" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -3,7 +3,14 @@ package com.shiina.mobile.observation
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import java.util.Calendar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
+/**
+ * Entertainment screen-time reader.
+ * Audit C7: query is blocking — exposed as suspend on Dispatchers.IO so
+ * callers never pin the main thread.
+ */
 class UsageReader(private val context: Context) {
 
     private val usageStatsManager = context.getSystemService(UsageStatsManager::class.java)
@@ -19,8 +26,8 @@ class UsageReader(private val context: Context) {
         "com.discord"
     )
 
-    fun getTodayEntertainmentMinutes(): Int {
-        if (usageStatsManager == null) return 0
+    suspend fun getTodayEntertainmentMinutes(): Int = withContext(Dispatchers.IO) {
+        if (usageStatsManager == null) return@withContext 0
         val calendar = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -32,7 +39,7 @@ class UsageReader(private val context: Context) {
 
         val stats = usageStatsManager.queryUsageStats(
             UsageStatsManager.INTERVAL_DAILY, startTime, endTime
-        ) ?: return 0
+        ) ?: return@withContext 0
 
         var totalMillis = 0L
         for (stat in stats) {
@@ -40,7 +47,7 @@ class UsageReader(private val context: Context) {
                 totalMillis += stat.totalTimeInForeground
             }
         }
-        return (totalMillis / (1000 * 60)).toInt()
+        (totalMillis / (1000 * 60)).toInt()
     }
 
     private fun isEntertainment(pkg: String): Boolean {

@@ -19,6 +19,7 @@ fun CharacterPanel(viewModel: CharacterViewModel) {
     val tone by viewModel.tone.collectAsState()
     val mode by viewModel.mode.collectAsState()
     val renderError by viewModel.error.collectAsState()
+    val rememberedDays by viewModel.rememberedDays.collectAsState()
     val overlayOk = viewModel.canOverlay()
 
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
@@ -28,6 +29,13 @@ fun CharacterPanel(viewModel: CharacterViewModel) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (rememberedDays > 0) {
+            Text(
+                text = "remembers $rememberedDays day${if (rememberedDays == 1) "" else "s"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (!overlayOk) {
             Text(
                 text = "Overlay permission not granted. Use Permissions above.",

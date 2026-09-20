@@ -4,5 +4,9 @@ package com.shiina.mobile.decision
 interface DecisionProvider {
     val name: String
     val supportsVision: Boolean
-    suspend fun generate(summary: DecisionSummary): Decision
+    suspend fun generate(
+        summary: DecisionSummary,
+        memoryContext: String = "",
+        senses: String = "",
+    ): Decision
 }

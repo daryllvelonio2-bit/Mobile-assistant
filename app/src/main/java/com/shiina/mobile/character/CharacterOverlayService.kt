@@ -14,7 +14,9 @@ import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -23,6 +25,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -34,6 +39,7 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
+import com.shiina.mobile.CompanionApp
 import com.shiina.mobile.decision.Decision
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,10 +57,13 @@ class CharacterOverlayService : Service() {
     private var bubble: ComposeView? = null
     private var params: WindowManager.LayoutParams? = null
     private var tone by mutableStateOf("calm")
+    private var message by mutableStateOf("")
     private var mode: CharacterMode = CharacterMode.STAY
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wanderJob: Job? = null
+    private var autoDismissJob: Job? = null
     private var overlayOwner: OverlayLifecycleOwner? = null
+    private val showTimestamps = ArrayDeque<Long>()
 
     /** Retained Lifecycle/ViewModelStore/SavedState owner for the WindowManager-hosted ComposeView. */
     private class OverlayLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
@@ -104,9 +113,31 @@ class CharacterOverlayService : Service() {
         }
         runCatching {
             when (intent?.action) {
-                ACTION_HIDE -> removeBubble()
+                ACTION_HIDE -> {
+                    removeBubble()
+                    scope.launch(Dispatchers.IO) {
+                        runCatching {
+                            (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
+                        }
+                    }
+                }
                 else -> {
+                    // Audit F6: max 6 overlay shows per hour, independent of decisions.
+                    val now = System.currentTimeMillis()
+                    while (showTimestamps.isNotEmpty() && now - showTimestamps.first() > 3_600_000L) {
+                        showTimestamps.removeFirst()
+                    }
+                    if (showTimestamps.size >= MAX_SHOWS_PER_HOUR) {
+                        com.shiina.mobile.debug.AppDebugServer.log(
+                            "SERVICE", "Overlay rate limit: ${showTimestamps.size} shows this hour — skipping",
+                        )
+                    } else {
+                        showTimestamps.addLast(now)
+                    }
                     tone = intent?.getStringExtra(EXTRA_TONE) ?: tone
+                    if (intent?.hasExtra(EXTRA_MESSAGE) == true) {
+                        message = intent.getStringExtra(EXTRA_MESSAGE).orEmpty()
+                    }
                     val requested = intent?.getStringExtra(EXTRA_MODE)
                         ?.let { runCatching { CharacterMode.valueOf(it) }.getOrNull() }
                     if (requested != null) {
@@ -115,7 +146,10 @@ class CharacterOverlayService : Service() {
                         val decision = Decision(
                             tone = tone,
                             interrupt = intent?.getBooleanExtra(EXTRA_INTERRUPT, false) ?: false,
-                            action = intent?.getStringExtra(EXTRA_ACTION) ?: "none",
+                            intent = "presence",
+                            action = intent?.getStringExtra(EXTRA_ACTION) ?: "NONE",
+                            actionParam = "",
+                            message = "",
                         )
                         applyMode(CharacterController.modeFor(decision))
                     }
@@ -172,10 +206,8 @@ class CharacterOverlayService : Service() {
         }
         view.setContent {
             MaterialTheme {
-                Box(
+                Column(
                     modifier = Modifier
-                        .size(64.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
                         .pointerInput(Unit) {
                             detectDragGestures { change, drag ->
                                 change.consume()
@@ -186,13 +218,34 @@ class CharacterOverlayService : Service() {
                                 }
                             }
                         },
-                    contentAlignment = Alignment.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(
-                        text = tone.take(4),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
+                    if (message.isNotEmpty()) {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 0.8f),
+                                    offset = Offset(1f, 1f),
+                                    blurRadius = 4f,
+                                ),
+                            ),
+                            color = toneColor(tone),
+                            modifier = Modifier.widthIn(max = 240.dp),
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = tone.take(4),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
                 }
             }
         }
@@ -207,6 +260,23 @@ class CharacterOverlayService : Service() {
         }.onSuccess {
             com.shiina.mobile.debug.AppDebugServer.log("SERVICE", "wm.addView SUCCESS! Overlay bubble rendered on screen.")
             overlayOwner?.resume()
+            if (mode == CharacterMode.WANDER) {
+                scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        (application as CompanionApp).container.memoryOutcomes.markShown()
+                    }
+                }
+            }
+            // Audit U4: auto-dismiss after 60s so the bubble never outlives
+            // its dismiss-window semantics. Fresh shows reset the timer.
+            autoDismissJob?.cancel()
+            autoDismissJob = scope.launch {
+                delay(AUTO_DISMISS_MS)
+                removeBubble()
+                runCatching {
+                    (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
+                }
+            }
         }
     }
 
@@ -242,6 +312,13 @@ class CharacterOverlayService : Service() {
         }
     }
 
+    private fun toneColor(t: String): Color = when (t.lowercase()) {
+        "candid_direct" -> Color(0xFFFFC14D)
+        "firm_warning" -> Color(0xFFFF8A80)
+        "validating" -> Color(0xFFA7F3C7)
+        else -> Color.White
+    }
+
     private fun displaySize(): Pair<Int, Int> {
         val wm = windowManager ?: return 0 to 0
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -258,6 +335,7 @@ class CharacterOverlayService : Service() {
 
     private fun removeBubble() {
         wanderJob?.cancel()
+        autoDismissJob?.cancel()
         runCatching {
             val wm = windowManager
             val view = bubble
@@ -282,10 +360,13 @@ class CharacterOverlayService : Service() {
         const val ACTION_SHOW = "com.shiina.mobile.character.SHOW"
         const val ACTION_HIDE = "com.shiina.mobile.character.HIDE"
         const val EXTRA_TONE = "tone"
+        const val EXTRA_MESSAGE = "message"
         const val EXTRA_MODE = "mode"
         const val EXTRA_INTERRUPT = "interrupt"
         const val EXTRA_ACTION = "action"
         private const val CHANNEL = "character"
         private const val NOTIFICATION_ID = 2
+        private const val AUTO_DISMISS_MS = 60_000L
+        private const val MAX_SHOWS_PER_HOUR = 6
     }
 }
