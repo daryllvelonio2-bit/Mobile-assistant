@@ -34,6 +34,7 @@ class ActionExecutor(
     private val reminders: ReminderScheduler? = null,
     private val toolTracker: ToolTracker? = null,
     private val episodeDao: MemoryEpisodeDao? = null,
+    private val deviceActionController: DeviceActionController? = null,
 ) {
 
     suspend fun execute(actionType: String, param: String = "") {
@@ -167,6 +168,66 @@ class ActionExecutor(
             }
             context.startService(i)
             "overlay mode set: ${mode.name}"
+        }
+        "MEDIA_CONTROL" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = if (param.startsWith("play ", ignoreCase = true)) {
+                controller.playSong(param.removePrefix("play ").trim())
+            } else {
+                controller.controlMedia(param)
+            }
+            runCatching { toolTracker?.record("media_control", true) }
+            res
+        }
+        "PLAY_MUSIC" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.playSong(param)
+            runCatching { toolTracker?.record("play_music", true) }
+            res
+        }
+        "SEARCH_MUSIC" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.searchMusic(param)
+            runCatching { toolTracker?.record("search_music", true) }
+            res
+        }
+        "VOLUME_CONTROL" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.volumeControl(param)
+            runCatching { toolTracker?.record("volume_control", true) }
+            res
+        }
+        "DEVICE_ACTION" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.deviceAction(param)
+            runCatching { toolTracker?.record("device_action", true) }
+            res
+        }
+        "OPEN_APP" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.openApp(param)
+            runCatching { toolTracker?.record("open_app", !res.startsWith("could not")) }
+            res
+        }
+        "SEARCH_APP" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val app = param.substringBefore(":").trim()
+            val q = param.substringAfter(":", "").trim()
+            val res = controller.searchApp(app, q)
+            runCatching { toolTracker?.record("search_app", true) }
+            res
+        }
+        "LIST_APPS" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.listApps(param)
+            runCatching { toolTracker?.record("list_apps", true) }
+            res
+        }
+        "GET_DEVICE_STATE" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val res = controller.getDeviceState()
+            runCatching { toolTracker?.record("device_state", true) }
+            res
         }
         else -> {
             AppDebugServer.log("ACTION", "Unknown action rejected: $action")

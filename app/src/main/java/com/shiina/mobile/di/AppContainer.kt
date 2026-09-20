@@ -94,6 +94,17 @@ class AppContainer(context: Context) {
         MemoryCompactor(memoryEpisodeDao, memorySummaryDao, chatTurnDao, database.goalDao())
     }
 
+    val memoryConsolidator: com.shiina.mobile.memory.MemoryConsolidator by lazy {
+        com.shiina.mobile.memory.MemoryConsolidator(
+            context = appContext,
+            chatTurnDao = chatTurnDao,
+            learnedMemoryManager = learnedMemoryManager,
+            memoryStore = memoryStore,
+            keyStore = keyStore,
+            http = httpClient,
+        )
+    }
+
     val nightlyReflection: NightlyReflection by lazy {
         NightlyReflection(
             memoryEpisodeDao,
@@ -103,6 +114,7 @@ class AppContainer(context: Context) {
             memoryStore,
             memoryCompactor,
             toolStatDao,
+            memoryConsolidator,
         )
     }
 
@@ -140,11 +152,16 @@ class AppContainer(context: Context) {
         BaselineUpdater(database.baselineDao(), database.usageDao())
     }
 
+    val deviceActionController: com.shiina.mobile.action.DeviceActionController by lazy {
+        com.shiina.mobile.action.DeviceActionController(appContext)
+    }
+
     val actionExecutor: ActionExecutor by lazy {
         ActionExecutor(
             appContext, settingsRepository, database.goalDao(),
             memoryOutcomes, memoryStore, screenshotTaker, webSearch,
             pageReader, reminderScheduler, toolTracker, memoryEpisodeDao,
+            deviceActionController,
         )
     }
 

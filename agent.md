@@ -32,3 +32,14 @@
     - Always maintain and update `TREE.md` whenever new files, directories, modules, or components are added, removed, or restructured in the repository.
     - Ensure `TREE.md` accurately reflects the project structure so main and subagents have immediate visibility into code layout without redundant file-tree scanning.
 15. **Version Increment:** Always increment the application version by `0.1.0` (and version code by `+1`) on every update or change.
+16. **On-Demand Hierarchical Toolset Architecture:**
+    - **Never Dump All Tool Calls or Domain Instructions:** Never include exhaustive tool definitions, schema parameters, or domain-specific actuation rules (e.g. music playback instructions) in the base system prompt.
+    - **Hierarchical Discovery:** The base prompt must only provide high-level toolset categories (`media`, `apps`, `device`, `web`, `planner`) and the `GET_TOOLSET` meta-tool.
+    - **On-Demand Loading:** The agent must explicitly invoke `GET_TOOLSET` for the relevant domain to receive tool specifications, exact parameter schemas, usage guidance, and actuation rules for that domain before acting.
+    - **Closed-Loop Execution:** Tasks must follow a strict closed-loop flow: (1) Discover domain toolset via `GET_TOOLSET`, (2) Actuate within the domain, (3) Observe execution receipts, and (4) Conclude with grounded conversational response. Never guess parameters or claim outcomes without observing receipts.
+17. **Visual Verification & Autonomous Screen Interaction:**
+    - **Never Stop at App Launch:** When the user asks to perform an in-app task (e.g. watch anime, search video, play a game), launching the app via `OPEN_APP` is only step 1. Never conclude or claim completion upon merely opening an app.
+    - **Mandatory Visual Verification:** After `OPEN_APP`, the agent must invoke `TAKE_SCREENSHOT` with status `'CONTINUE'` to verify that the app opened and inspect the actual screen layout, buttons, search bars, and categories.
+    - **Automated Screen Execution:** After observing the screenshot, the agent must use `TAP_SCREEN` (with `x, y` coordinates or element `text`), `INPUT_TEXT`, or `SWIPE_SCREEN` with status `'CONTINUE'` to execute the requested task (selecting genre, clicking search, tapping play) until completion is verified.
+
+

@@ -6,6 +6,218 @@
 - **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
+- **2026-09-20 — UI Hierarchy Grounding, Precision Screen Tapping & Element-ID Selection (v0.69.0):**
+  Addressed coordinate drift and visual targeting error on high-resolution displays (1080x2310) by implementing direct UI hierarchy inspection and element-ID-based screen interaction:
+  - **UI Hierarchy Grounding ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:
+    - Created `UiElement` data class (`id`, `text`, `desc`, `type`, `centerX`, `centerY`, `bounds`, `isClickable`, `isEditable`).
+    - Implemented `dumpInteractiveElements()` traversing `rootInActiveWindow` to discover all visible, interactive, or text-labeled elements on screen, deduplicating them and assigning sequential element IDs (1..N).
+    - Implemented `clickElementById(id)`: attempts direct accessibility node click, falling back to physical tap gesture on the element's exact screen center coordinates (`centerX`, `centerY`).
+    - Implemented `clickText(text)`: searches hierarchy for node by text with physical tap gesture fallback on node center bounds.
+  - **Screen Element Grounding & Precision Tap Routing ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt))**:
+    - Implemented `getScreenElementsSummary()`: outputs display resolution (e.g. `1080x2310`) and a compact formatted list of visible interactive elements (e.g. `- [1] "Search" at (756, 2217) (clickable)`).
+    - Updated `tapScreen(x, y, text, elementId)`: establishes targeting priority:
+      1. `elementId > 0`: targets exact element from screen hierarchy via `clickElementById`.
+      2. `text`: targets element by text with tap fallback via `clickText`.
+      3. `x, y`: scaled from 0..1000 normalized coordinates or executed as raw display pixels.
+  - **Loop Core & Schema Integration ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Added `elementId` to `AgentStep`, `parseAgentStep`, and `toolArgsSchema`.
+    - Added `INSPECT_SCREEN` to `KNOWN_TOOLS`.
+    - Automatically injects `# Screen Grounding Hierarchy` into the prompt execution state following UI actions (`OPEN_APP`, `TAP_SCREEN`, `SWIPE_SCREEN`, `INPUT_TEXT`, `TAKE_SCREENSHOT`, `INSPECT_SCREEN`).
+  - **Tool Catalog & Prompt Updates**:
+    - Updated [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt) and [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) documenting `element_id` parameter and grounding priority (element_id > text > coordinates).
+  - **Version & UI Update**:
+    - Bumped `versionCode = 69`, `versionName = "0.69.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Normalized Coordinate Mapping & Automatic Screenshot Attachment (v0.68.0):**
+  Diagnosed monitor session logs from real-device testing where `TAP_SCREEN` was invoked with normalized coordinates (x: 700, y: 960) that fell into blank space due to unmapped pixel resolution (1080x2310):
+  - **Normalized Coordinate Resolution ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt))**:
+    - Added automatic scale detection: when coordinates are in 0..1000 scale (standard LLM vision output), mapped them to real screen pixels `(x / 1000f) * screenWidth` and `(y / 1000f) * screenHeight` (e.g. mapping 700, 960 to 756, 2217 on 1080x2310).
+    - Prioritized `clickNodeByText(text)` so button/tab labels (e.g. "Search", "Genres") are clicked directly on the accessibility tree.
+  - **Automatic Vision Attachment & Step Runway ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Automatically captures and attaches screenshots to the prompt after `OPEN_APP`, `TAP_SCREEN`, `SWIPE_SCREEN`, and `INPUT_TEXT`, eliminating wasted turns spent manually calling `TAKE_SCREENSHOT`.
+    - Increased `MAX_AGENT_STEPS` from 8 to 15 to provide sufficient runway for complex multi-step app navigation.
+  - **Tool Catalog & Prompt Updates**:
+    - Updated [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt) and [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) documenting normalized 0..1000 coordinates, preferred text clicking, and auto-screenshot behavior.
+  - **Version & UI Update**:
+    - Bumped `versionCode = 68`, `versionName = "0.68.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts).
+    - Updated version in [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Accessibility Service Toggle & Settings Integration (v0.67.0):**
+  Added Accessibility service management and direct configuration to the app's Settings and Permissions screen:
+  - **Permissions & Settings Integration**:
+    - In [Permissions.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/permissions/Permissions.kt), implemented `hasAccessibilityAccess(context)` (checking live service state and `Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES`) and `openAccessibilitySettings(context)` (directing user to `Settings.ACTION_ACCESSIBILITY_SETTINGS`).
+    - Integrated accessibility into `hasAllPermissions(context)`.
+    - In [PermissionScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/permissions/PermissionScreen.kt), added "Accessibility service" item to `PermissionSection` with a "Grant" button that opens Android Accessibility Settings directly and reflects live "Granted" status when enabled.
+    - In [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt), updated version display to v0.67.0.
+  - **Version Update**: Bumped `versionCode = 67`, `versionName = "0.67.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts).
+- **2026-09-20 — Automatic APK Export to Downloads Folder on Build (v0.66.0):**
+  Updated `app/build.gradle.kts` with a custom `assembleDebug` task extension that automatically copies `app-debug.apk` to `/home/janelle/Downloads/shiina-debug.apk` immediately upon successful compilation. Verified clean build and successful copy.
+- **2026-09-20 — Autonomous Screen Interaction & Visual Verification Engine (v0.65.0):**
+  Eliminated stale hardcoded prompt instructions and equipped Shiina with the ability to visually verify screens and automatically tap, swipe, and type inside apps to execute tasks:
+  - **Stale Prompt Instruction Elimination**:
+    - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), removed the lingering hardcoded music example `(e.g. playing a song from the library, or adjusting state)` from the intermediate loop prompt.
+    - Replaced with dynamic, task-aware instructions:
+      - After `OPEN_APP`: instructs the agent to invoke `TAKE_SCREENSHOT` (`status: 'CONTINUE'`) to verify what is displayed on the screen and inspect UI layout/buttons.
+      - After `TAKE_SCREENSHOT`: confirms vision attachment and instructs locating coordinates/buttons to tap via `TAP_SCREEN` or type via `INPUT_TEXT`.
+      - After screen interactions (`TAP_SCREEN`, `SWIPE_SCREEN`, `INPUT_TEXT`, `PRESS_KEY`): guides further verification via screenshot or conclusion.
+  - **Screen Automation Engine ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:
+    - Created Android Accessibility Service with `dispatchGesture` for precision coordinate tapping (`tap(x, y)`), smooth scrolling/swiping (`swipe(startX, startY, endX, endY)`), element clicking by text (`clickNodeByText`), text entry (`inputText`), and global keys (`pressGlobal`).
+    - Configured in [res/xml/accessibility_service_config.xml](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/res/xml/accessibility_service_config.xml) and registered in [AndroidManifest.xml](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/AndroidManifest.xml).
+  - **Action Bridging & Dual Execution ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt))**:
+    - Implemented `tapScreen(x, y, text)`, `swipeScreen(startX, startY, endX, endY, direction)`, `inputText(text)`, and `pressKey(action)` supporting both AccessibilityService gestures and shell/ADB fallbacks.
+  - **Toolset & Prompt Expansion**:
+    - In [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt), added `TAKE_SCREENSHOT`, `TAP_SCREEN`, `SWIPE_SCREEN`, `INPUT_TEXT`, and `PRESS_KEY` to `apps` and `device` toolsets with schemas.
+    - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), formulated the App Execution & Screen Interaction Workflow and added Core Rule 8 (Visual Verification Before Concluding App Tasks).
+    - In [agent.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/agent.md), added Rule 17 (Visual Verification & Autonomous Screen Interaction).
+  - **Loop Core & Schema Integration**:
+    - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), registered `"TAP_SCREEN"`, `"SWIPE_SCREEN"`, `"INPUT_TEXT"`, `"PRESS_KEY"`, added coordinate fields to `AgentStep`, and wired `runTool` and `toolArgsSchema`.
+- **2026-09-20 — On-Demand Hierarchical Toolset Discovery Architecture (v0.65.0):**
+  Eliminated prompt flooding and tool dumping by transitioning from static full-tool dumps to an on-demand, hierarchical toolset discovery architecture:
+  - **On-Demand Tool Catalog ([ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - Partitioned all tools and specialized actuation instructions into domain toolsets:
+      - `media`: `SEARCH_MUSIC`, `PLAY_MUSIC`, `MEDIA_CONTROL`, `VOLUME_CONTROL` with detailed parameter schemas and playback rules.
+      - `apps`: `OPEN_APP`, `SEARCH_APP`, `LIST_APPS` with exact app-launch and search semantics.
+      - `device`: `GET_DEVICE_STATE`, `VOLUME_CONTROL`, `TAKE_SCREENSHOT`, `SET_MODE` with state-inspection guidelines.
+      - `web`: `SEARCH_WEB`, `READ_URL` with search and content-fetching protocols.
+      - `planner`: `SET_REMINDER`, `LOG_GOAL`, `CHECK_GOALS`, `COMPLETE_GOAL` with goal and reminder schemas.
+    - Provided `ToolCatalog.TOOLSET_OVERVIEW` for lightweight base prompt inclusion and `ToolCatalog.getToolset(name)` for on-demand loading.
+  - **Base Prompt Modernization ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - Replaced all verbose tool descriptions in `TOOL_SPEC` with high-level toolset categories and the `GET_TOOLSET` meta-tool.
+    - Standardized the on-demand execution loop: (1) `GET_TOOLSET` -> (2) Actuate -> (3) Observe -> (4) Conclude.
+    - Maintained strict global rules prohibiting blind one-step execution, premature confirmations, and gaslighting.
+  - **Loop Core & Schema Integration ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Added `GET_TOOLSET` to `KNOWN_TOOLS`.
+    - Added `toolset` property to `AgentStep`, `parseAgentStep`, and `toolArgsSchema`.
+    - Wired `GET_TOOLSET` in `runTool` to return `ToolCatalog.getToolset(...)`.
+  - **Operating Guidelines Update ([agent.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/agent.md))**:
+    - Added Rule 16 specifying the On-Demand Hierarchical Toolset Architecture and prohibiting full tool dumps.
+  - **Repository & Version Updates**:
+    - Added `ToolCatalog.kt` to [TREE.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/TREE.md).
+    - Bumped `versionCode = 65`, `versionName = "0.65.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts).
+- **2026-09-20 — Multi-Domain General Task Harness & Balanced Loop Logic (v0.64.0):**
+  Eliminated over-specialization on music and restructured the prompt architecture and loop harness to be a general, robust task execution engine across all device operations:
+  - **Universal Think-Act-Observe-Verify Protocol**:
+    - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), restructured `GLOBAL_RULES` and `TOOL_SPEC` to generalize across all device tasks (launching apps, in-app searching, web search, page reading, volume and media control, reminders, goal tracking, and screenshot analysis).
+    - Established the 4-phase closed loop:
+      1. *Phase 1 (Inspect & Gather Facts)*: Use `LIST_APPS`, `GET_DEVICE_STATE`, `SEARCH_MUSIC`, `SEARCH_WEB`, or `TAKE_SCREENSHOT` (`status: 'CONTINUE'`) if information is required before acting.
+      2. *Phase 2 (Execute Action)*: Invoke the actuation tool (`OPEN_APP`, `SEARCH_APP`, `VOLUME_CONTROL`, `MEDIA_CONTROL`, `PLAY_MUSIC`, `SET_REMINDER`, `LOG_GOAL`, `COMPLETE_GOAL`, `SET_MODE`) with `status: 'CONTINUE'`.
+      3. *Phase 3 (Observe & Verify)*: Review the observation receipt returned by the environment.
+      4. *Phase 4 (Conclude & Respond)*: Set `tool: 'NONE'` and `status: 'DONE'`, delivering a final conversational message strictly grounded in verified facts.
+      5. *Pure Conversation*: Direct chatting/bantering completes in 1 step with `tool: 'NONE'`, `status: 'DONE'`.
+  - **Universal Rules**:
+    - *No Blind One-Step Actions*: All actions require `status: 'CONTINUE'` so receipts are observed.
+    - *Zero Premature Confirmation*: Intermediate messages are strictly progress updates, preventing false claims before receipt verification.
+    - *Observation Grounding & Zero Hallucination*: Prohibits claiming an action worked when the receipt shows it failed, was blocked, or had no results.
+    - *Parameter Precision*: Requires explicit arguments across all tools without omission.
+- **2026-09-20 — Loop Core & Harness Restructuring: True Closed-Loop & Grounded Actuation (v0.63.0):**
+  Investigated device debug logs revealing false positive observations and premature speech output (where Shiina falsely reported music playing when it was not found, gaslighting the user after dead `playFromSearch` calls to Chrome):
+  - **Harness & Observation Grounding in [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt)**:
+    - `searchMusic(query)`: Added browsing support for empty/all queries (returning top 20 library tracks) and fallback candidate suggestions (`available_tracks`) when specific searches yield 0 results, allowing Shiina to perceive real songs on the device instead of guessing.
+    - `playSong(query, player)`: Eliminated blind `playFromSearch` calls to inactive/browser media sessions that returned false positive `"requested"` receipts. If local MediaStore has no match, it now genuinely launches YouTube search in the browser (`https://www.youtube.com/results?search_query=...`) and returns an honest receipt (`status: "not_found_locally"`, `action_taken: "opened_in_browser"`, `is_music_active`).
+    - Added `is_music_active` verification to all media observation receipts.
+  - **Loop Core Restructuring in [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt)**:
+    - Fixed answer assignment: `answer` is now strictly assigned ONLY when `isDone` is true (`status: "DONE"` and `tool: "NONE"`). Intermediate messages during tool execution (`status: "CONTINUE"`) are pushed to the overlay as live progress bubbles and NEVER overwrite the final answer or leak premature claims into conversation history.
+  - **System Prompt & Workflow Discipline in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt)**:
+    - Added **Zero Gaslighting** and **Zero Premature Confirmation** rules to `GLOBAL_RULES` and `TOOL_SPEC`.
+    - Formulated the **Grounded Music Workflow**:
+      1. Inspect via `SEARCH_MUSIC` (`status: "CONTINUE"`).
+      2. Read returned `tracks` or `available_tracks` and select an actual song.
+      3. Call `PLAY_MUSIC` (`status: "CONTINUE"`).
+      4. Inspect the `PLAY_MUSIC` receipt (status, `is_music_active`), and report the genuine truth (`tool: "NONE"`, `status: "DONE"`).
+- **2026-09-20 — Closed-Loop Task Execution: Know-Act-Observe Protocol & Prohibition of One-Step Actions (v0.62.0):**
+  Eliminated blind "one-step" execution to guarantee that Shiina understands what she is doing before acting and verifies the outcome before confirming:
+  - **Prohibition of Blind One-Step Actions**:
+    - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), updated `GLOBAL_RULES` and `TOOL_SPEC` to strictly forbid setting `status: 'DONE'` when invoking any action tool.
+    - Mandated the **3-Phase Closed-Loop (KNOW -> ACT -> OBSERVE -> CONCLUDE)**:
+      1. *Phase 1 (Know/Inspect)*: Use `SEARCH_MUSIC`, `GET_DEVICE_STATE`, or `LIST_APPS` with `status: 'CONTINUE'` to discover available tracks, apps, or state before acting.
+      2. *Phase 2 (Act)*: Invoke the actuation tool (`PLAY_MUSIC`, `VOLUME_CONTROL`, `MEDIA_CONTROL`, `OPEN_APP`) with `status: 'CONTINUE'` so the system returns an observation receipt.
+      3. *Phase 3 (Observe & Conclude)*: Inspect the observation receipt, verify the outcome, and conclude with `tool: 'NONE'`, `status: 'DONE'`, and a conversational response grounded in what actually happened.
+      4. *Pure Conversation*: Chat without device tasks concludes directly in 1 step with `tool: 'NONE'`, `status: 'DONE'`.
+  - **Loop Termination Guard in [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt)**:
+    - Updated `isDone` so the loop only terminates when `tool == "NONE"`. If an action tool was invoked, the loop cannot break early—the tool is executed, and its observation receipt is fed back into the prompt so Shiina is required to observe and verify the outcome before reporting back to the user.
+- **2026-09-20 — Expanded Global Prompt & Grounded Device Agency (v0.61.0):**
+  Significantly expanded Shiina's global prompt architecture ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) v5.0) to align with the new environment harness:
+  - **`GLOBAL_RULES` Expanded**:
+    - Integrated **Device Agency & Environment**: explicitly establishes that Shiina lives on the device, shares it with the user, and has real hands/capabilities to interact with the environment. Mandates executing tools decisively rather than roleplaying in text or behaving like a helpless bot or submissive butler.
+    - Added **Action Fidelity**: explicitly grounds that conversational text cannot change device settings and strictly forbids claiming an action happened in chat without invoking the tool in that turn.
+    - Added **Grounded Reality**: reinforces relying on provided context, device senses, and observation receipts.
+  - **`TALK_DRIVE` Refined**:
+    - Added **Effortless Companion Agency**: guides Shiina to handle device tasks (passing the aux cord, adjusting volume) naturally and without formal butler responses or resistance.
+  - **`TOOL_SPEC` Expanded**:
+    - Detailed `tool_args` parameters and types for all tools.
+    - Explicitly defined **Loop Control & Execution Patterns**: single-step execution (`status: "DONE"`) for direct actuations vs. inspection & multi-step execution (`status: "CONTINUE"`) for searching/discovering.
+    - Detailed affordance documentation distinguishing `PLAY_MUSIC` (required query, specific tracks) from `MEDIA_CONTROL` (generic pause/resume/stop), `SEARCH_MUSIC` (inspection without playback), and `VOLUME_CONTROL` (audio volume).
+    - Structured 8 core rules covering Action Fidelity & Zero Hallucination, Track Playback vs Generic Playback, Volume vs Media, Observation Grounding, No Meta Leaks, Device Senses Awareness, Non-Repetitive Responses, and Authentic Companion Cadence.
+- **2026-09-20 — Grounded Agent Harness: Constrained Decoding (response_schema), Inspection-Actuation Orthogonality & Structured Receipts (v0.60.0):**
+  Eliminated fragile regex bypasses and fundamentally upgraded Shiina's agent harness so the engine guarantees valid JSON arguments, separates inspection from actuation, and provides structured observation feedback:
+  - **Constrained Decoding via Gemini `response_schema`**:
+    - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), upgraded `postText` to supply `generationConfig` with `response_mime_type = "application/json"` and `response_schema` directly to the Gemini API.
+    - The JSON schema strictly enforces `thought`, `mood`, `status` (`"acting" | "done"`), `tool` (enum matching allowed tools), `tool_args` (with typed properties `query`, `action`, `level`, `app`, `player`, `filter`), and `message`. This eliminates parameter omission and invalid tool names at the decoding level.
+    - Fully removed regex/string bypasses (`extractSongQuery` and `reconcileMissingTool`).
+  - **Inspection vs Actuation Affordance Design**:
+    - Separated music search from playback: implemented `SEARCH_MUSIC` in [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt), [DecisionModels.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/DecisionModels.kt), [ActionExecutor.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ActionExecutor.kt), [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), and [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt). Shiina can now inspect candidate tracks in `MediaStore` (`[{"id":..., "title":..., "artist":..., "duration_sec":...}]`) before deciding to act.
+    - Dedicated audio control: implemented `VOLUME_CONTROL` supporting `restore`, `mute`, `unmute`, `volume_up`, `volume_down`, and direct percentage `set` (0..100).
+  - **Structured Observation Receipts**:
+    - Upgraded all tools in [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt) (`playSong`, `controlMedia`, `searchApp`, `openApp`, `listApps`, `getDeviceState`, `searchMusic`, `volumeControl`) to return structured JSON receipts (e.g. `{"tool":"PLAY_MUSIC", "status":"playing", "source":"local_storage", ...}`) into the Think-Act-Observe loop, providing grounded facts for the next turn.
+- **2026-09-20 — Action Reconciliation Safety Net, Query Extraction & Volume Restoration (v0.59.0):**
+  Resolved execution failures discovered from device monitor logs where Shiina either omitted tool parameters (e.g. calling `PLAY_MUSIC` with blank `query`, causing fallback to generic media resume) or hallucinated action completion in conversational text while returning `tool: "NONE"` (e.g. stating "Fine, volume restored" or "Alright, digging up Perfect for you" without executing any tool):
+  - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt):
+    - Added Rule 10 (Anti-Hallucination of Actions): strictly prohibits claiming or confirming actions (volume, music, apps) in conversational text while returning `tool: "NONE"`, and mandates that `query` must never be omitted on `PLAY_MUSIC`.
+    - Updated `TOOL_SPEC` to document `restore` action for `DEVICE_ACTION` and explicit required query requirement for `PLAY_MUSIC`.
+  - In [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt):
+    - Upgraded `playSong`: query sanitization (strips extraneous quotes/punctuation), exact phrase matching on MediaStore with a multi-keyword fallback across `TITLE`, `DISPLAY_NAME`, and `ARTIST` (so tracks like `Conan Gray - Heather (Official Lyric Video).mp3` match search queries like "conan gray heather"), and ensured local audio intents do not lock package to streaming apps (YouTube/Spotify) that cannot handle local content URIs.
+    - Upgraded `deviceAction`: added support for `restore`, `restore_volume`, `put_back_volume`, and `unmute` (unmutes AND ensures volume is raised to at least 50% if currently 0), percentage volume commands (`volume_50`, `set_volume: 75`), and Tagalog terms (`lakasan`, `hinaan`).
+    - In `controlMedia`: routed `restore`/`unmute` requests directly to `deviceAction("restore")`.
+  - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt):
+    - Added `extractSongQuery(userText, thought, message)`: robustly extracts requested song titles from quoted text in thought/message, conversational phrases ("queueing up X", "digging up X", "playing X"), or user requests ("play X", "i want X", "search my music playlist for X").
+    - Added `reconcileMissingTool(userText, step)`: software safety net that intercepts cases where `tool == "NONE"` or raw text was returned but an action was requested or promised (volume restore/up/down/mute, pause/resume/next/prev, song playback, opening apps), transforming it into the appropriate executable tool.
+    - In `askGemini`: wired query extraction fallback for `PLAY_MUSIC` and action reconciliation for `tool == "NONE"` and raw model text. In `runTool`, added query extraction fallback for `PLAY_MUSIC`.
+- **2026-09-20 — Expanded Environment Discovery, Local MediaStore Audio & In-App Actions (v0.58.0):**
+  Expanded Shiina's environment awareness and action capabilities so she can discover installed apps, inspect detailed device/audio state, and properly play local audio tracks:
+  - In [AndroidManifest.xml](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/AndroidManifest.xml), added `READ_EXTERNAL_STORAGE` and `READ_MEDIA_AUDIO` permissions so Shiina can query the on-device `MediaStore` audio library.
+  - In [DeviceSenses.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/observation/DeviceSenses.kt), added `media_volume` (e.g. `"7/15"`) and `available_music_players` (e.g. Huawei Music, Kyoto Player, YouTube, Spotify, Chrome, Brave) into the live device senses JSON snapshot.
+  - In [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt):
+    - Upgraded `playSong(query, player)` to query `MediaStore.Audio.Media.EXTERNAL_CONTENT_URI` for matching local tracks (e.g. Download/Music folder) and directly launch `ACTION_VIEW` on `content://media/external/audio/media/<id>` with `audio/*` in the device's music player. Also supports explicit player routing (`player="youtube"`, `player="spotify"`) and active `MediaSession` `playFromSearch`.
+    - Implemented `searchApp(app, query)`: directly searches inside specific target applications (YouTube app/web, Spotify, Maps, Play Store, Browser).
+    - Implemented `listApps(filter)`: dynamically lists installed packages on the device filtered by category (`music`, `browser`, `media`, `all`).
+    - Implemented `getDeviceState()`: returns live audio/media volume, ringer mode, and active music track metadata.
+  - In [DecisionModels.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/DecisionModels.kt) and [ActionExecutor.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ActionExecutor.kt), registered `"SEARCH_APP"`, `"LIST_APPS"`, and `"GET_DEVICE_STATE"` in `ALLOWED_ACTIONS` and wired them to `DeviceActionController`.
+  - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.8), updated `TOOL_SPEC` to expose `SEARCH_APP`, `LIST_APPS`, and `GET_DEVICE_STATE`. Updated Rule 9 (Action & Environment Orientation) to instruct that song requests query on-device local storage first with YouTube fallback, in-app searches use `SEARCH_APP`, and app discovery uses `LIST_APPS`.
+  - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), added `player` and `filter` fields to `AgentStep`, registered the new tools in `KNOWN_TOOLS`, and wired `SEARCH_APP`, `LIST_APPS`, and `GET_DEVICE_STATE` in `runTool`.
+- **2026-09-20 — PC-side chat via adb wifi (v0.57.0):**
+  Chat with Shiina from the PC terminal over wifi — no phone needed. New exported `debug/AdbTalkReceiver.kt` (manifest-registered, explicit-component delivery) forwards `--es adb_text` into `DebugTalkService.ACTION_TALK`, sharing the full Talk pipeline (RemoteInput path untouched, 500-char cap kept). New host script `send.py` (wifi-serial auto-select, device-shell quoting fix so multi-word messages arrive intact). Verified end-to-end on 192.168.43.1:5555: `send.py` → `You:` logged → Gemini agent step → `Shiina (candid): Terminal check received, loud and clear.` (~2s). Usage: `python3 send.py "hi shiina"`, reply streams in the monitor window.
+ Follow-up: `chat.py` interactive REPL (`python3 chat.py`, type + Enter to send, `/quit` to exit) reusing `send_message()` — verified live ("Loop's fine. Still here, still listening.").
+- **2026-09-20 — Specific Song/Track Playback & PLAY_MUSIC Tool (v0.56.0):**
+  Addressed user feedback where asking Shiina to play a specific song (e.g. *"play Heather"*) only resumed the currently paused/queued track instead of searching and playing the requested song.
+  - In [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt), implemented `playSong(query)`:
+    - Queries active `MediaSession` controllers with `playFromSearch(query, bundle)` containing `SearchManager.QUERY` and `MediaStore.EXTRA_MEDIA_FOCUS`.
+    - Dispatches `MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH` targeted to the active music player (or generic fallback).
+    - Falls back to Spotify search deep link (`spotify:search:<query>`) or YouTube search intent if local media players do not resolve.
+    - Updated `controlMedia(action, query)` to delegate to `playSong` when a query is provided or when action is `"play <song>"`.
+  - In [DecisionModels.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/DecisionModels.kt) and [ActionExecutor.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ActionExecutor.kt), registered `"PLAY_MUSIC"` in `ALLOWED_ACTIONS` and wired it to `deviceActionController.playSong(param)`.
+  - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.7), added `PLAY_MUSIC` to `TOOL_SPEC` (`{"tool":"PLAY_MUSIC","query":"<song name, artist, or playlist>"}`) and updated Rule 9 to explicitly instruct that specific song requests must invoke `PLAY_MUSIC` with the song title rather than generic resume.
+  - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), added `PLAY_MUSIC` to `KNOWN_TOOLS`, enhanced `parseAgentStep` to extract `query` from `song`, `track`, or `title` fields, and wired `PLAY_MUSIC` and query-aware `MEDIA_CONTROL` in `runTool`.
+- **2026-09-20 — On-Device Task Execution & Media/App Action Capabilities (v0.55.0):**
+  Investigated recent debug logs where the user commanded Shiina to *"Turn it off thenn"* and *"Turn it off"* while music was playing. Discovered that Shiina was bantering/bluffing without actually being able to control media or execute on-device tasks due to lack of action tools in `TOOL_SPEC`, `KNOWN_TOOLS`, and `DebugTalkService.kt`.
+  - Created [DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt):
+    - `controlMedia(action)`: controls active media playback (`pause`, `play`, `stop`, `next`, `prev`, `toggle`). Interacts with active `MediaSession` controllers via `MediaSessionManager`, dispatches `KeyEvent` media keycodes via `AudioManager`, and transiently requests audio focus on pause/stop to guarantee immediate silence. Also synchronizes state with `MusicTracker`.
+    - `deviceAction(action)`: adjusts device volume (`volume_up`, `volume_down`, `mute`, `unmute`) via `AudioManager`.
+    - `openApp(query)`: resolves installed packages by exact package name or app label (e.g. Spotify, YouTube, Chrome, Camera, Settings) and launches them via `Intent.FLAG_ACTIVITY_NEW_TASK`.
+  - In [DecisionModels.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/DecisionModels.kt) and [ActionExecutor.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ActionExecutor.kt), registered `"MEDIA_CONTROL"`, `"DEVICE_ACTION"`, and `"OPEN_APP"` in `ALLOWED_ACTIONS` and wired them to `DeviceActionController`.
+  - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.6), updated `TOOL_SPEC` to expose `MEDIA_CONTROL`, `DEVICE_ACTION`, `OPEN_APP`, and `LOG_GOAL`. Added Rule 9 (Action Orientation): instructs Shiina to actually execute the tool when asked, commanded, or dared to perform an action (e.g., turning off music, pausing, opening an app, setting reminders) rather than merely bluffing in text.
+  - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), added `action` and `app` fields to `AgentStep`, added the new tools to `KNOWN_TOOLS` and `runTool`, and updated the repetition detection signature.
+  - In [DebugWebServer.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugWebServer.kt), fixed `/api/events` JSON serialization using `JSONObject.quote(...)` and fixed HTTP `Content-Length` to use UTF-8 byte count instead of character length, preventing JSON decoding errors and response truncation.
+  - In [AppContainer.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/di/AppContainer.kt), wired `DeviceActionController` into `actionExecutor` and exposed it on the application container.
+- **2026-09-20 — Wifi debugging support for monitor.py (host tool, no app bump):**
+  Enabled `adb tcpip 5555` + `adb connect 192.168.43.1:5555` on the Huawei JNY-LX1 (Android 10, phone is hotspot host at 192.168.43.1); both USB + wifi transports live, logcat/pidof verified over wifi. `monitor.py` now prefers the wifi transport by default, honors `-s/--serial` and `$ANDROID_SERIAL`, and adds `--setup-wifi PHONE_IP` (tcpip+connect in one shot) and `--list`. Run cable-free with `python3 monitor.py`.
+- **2026-09-20 — Asynchronous Memory Consolidation & Inline LEARN Removal (v0.54.0):**
+  Moved fact extraction from the real-time conversation loop to asynchronous background reflection to eliminate token waste, duplicate writes, and conversational distraction.
+  - In [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.5), removed `LEARN` tool and inline fact extraction rule (Rule 5) from `TOOL_SPEC`. Shiina can now focus 100% on natural, warm dialogue without deliberating whether to emit inline JSON extraction payloads.
+  - In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), removed `LEARN` from `KNOWN_TOOLS` and `runTool`. Added debounced `scheduleBackgroundConsolidation()` which triggers 20 seconds after the last chat message when conversation pauses.
+  - Created [MemoryConsolidator.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/MemoryConsolidator.kt) wired through [AppContainer.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/di/AppContainer.kt):
+    - Evaluates unextracted turns against existing memory to extract durable user facts, preferences, and rules.
+    - Persists extracted facts cleanly to `learned_memory.md` ([LearnedMemoryManager.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/LearnedMemoryManager.kt)) and SQLite [MemoryStore.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/MemoryStore.kt).
+    - Tracks `last_extracted_turn_timestamp` to prevent re-extracting already consolidated turns.
+  - In [MainActivity.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/MainActivity.kt), added background extraction trigger in `onStop()`.
+  - In [NightlyReflection.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/NightlyReflection.kt), integrated `memoryConsolidator.consolidate(force = true)` into the nightly worker pass.
 - **2026-09-20 — Conversation Date/Time Timestamps & 10-Hour Inactivity Pouty Mood (v0.53.0):**
   Implemented explicit date and time timestamps on every conversation turn and added a prolonged-absence pouty mood feature.
   - In [ChatTurn.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/db/ChatTurn.kt), every conversation turn in history (and active conversation) is now formatted with a date and time prefix `[yyyy-MM-dd h:mm a] Role: text`, ensuring full temporal awareness across conversations.

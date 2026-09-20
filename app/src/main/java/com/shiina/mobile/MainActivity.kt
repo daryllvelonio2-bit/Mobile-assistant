@@ -129,6 +129,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStop() {
+        super.onStop()
+        val container = (application as CompanionApp).container
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { container.memoryConsolidator.consolidate() }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

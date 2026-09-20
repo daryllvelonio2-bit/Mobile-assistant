@@ -50,9 +50,26 @@ fun openNotificationListenerSettings(context: Context) {
     )
 }
 
+fun hasAccessibilityAccess(context: Context): Boolean {
+    if (com.shiina.mobile.action.ShiinaAccessibilityService.isEnabled) return true
+    val enabledServices = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+    ) ?: return false
+    val expectedServiceName = "${context.packageName}/${com.shiina.mobile.action.ShiinaAccessibilityService::class.java.canonicalName}"
+    return enabledServices.contains(expectedServiceName) || enabledServices.contains(context.packageName)
+}
+
+fun openAccessibilitySettings(context: Context) {
+    context.startActivity(
+        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    )
+}
+
 fun hasAllPermissions(context: Context): Boolean {
     return hasUsageAccess(context) &&
         Settings.canDrawOverlays(context) &&
-        canScheduleExactAlarms(context)
+        canScheduleExactAlarms(context) &&
+        hasAccessibilityAccess(context)
 }
 

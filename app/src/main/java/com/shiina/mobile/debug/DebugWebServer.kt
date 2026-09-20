@@ -87,8 +87,9 @@ object AppDebugServer {
                 val sb = StringBuilder("[")
                 for ((index, e) in events.withIndex()) {
                     if (index > 0) sb.append(",")
-                    val safeMsg = e.message.replace("\"", "\\\"").replace("\n", "\\n")
-                    sb.append("{\"timestamp\":${e.timestamp},\"category\":\"${e.category}\",\"message\":\"$safeMsg\"}")
+                    val safeMsg = org.json.JSONObject.quote(e.message)
+                    val safeCat = org.json.JSONObject.quote(e.category)
+                    sb.append("{\"timestamp\":${e.timestamp},\"category\":$safeCat,\"message\":$safeMsg}")
                 }
                 sb.append("]")
                 responseBody = sb.toString()
@@ -97,8 +98,10 @@ object AppDebugServer {
                 responseBody = buildHtmlDashboard()
             }
 
-            val response = "HTTP/1.1 200 OK\r\nContent-Type: $contentType\r\nContent-Length: ${responseBody.length}\r\n\r\n$responseBody"
-            output.write(response.toByteArray(Charsets.UTF_8))
+            val responseBytes = responseBody.toByteArray(Charsets.UTF_8)
+            val header = "HTTP/1.1 200 OK\r\nContent-Type: $contentType\r\nContent-Length: ${responseBytes.size}\r\n\r\n"
+            output.write(header.toByteArray(Charsets.UTF_8))
+            output.write(responseBytes)
             output.flush()
             socket.close()
         } catch (_: Exception) {}

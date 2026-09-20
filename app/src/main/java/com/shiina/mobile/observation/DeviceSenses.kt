@@ -51,6 +51,12 @@ class DeviceSenses(
                 .put("ringer", ringer())
                 .put("music_playing", isPlaying)
                 .put("foreground_app", foregroundApp() ?: "unknown (no usage access)")
+            val am = context.getSystemService(AudioManager::class.java)
+            val curVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
+            val maxVol = am?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: -1
+            if (curVol >= 0 && maxVol > 0) {
+                json.put("media_volume", "$curVol/$maxVol")
+            }
             if (track != null && isPlaying) {
                 val desc = if (track.artist.isNotBlank()) "${track.title} by ${track.artist}" else track.title
                 json.put("current_music", desc.trim())
@@ -59,12 +65,35 @@ class DeviceSenses(
             } else {
                 json.put("current_music", null)
             }
+            val players = getAvailableMusicPlayers()
+            if (players.isNotEmpty()) {
+                json.put("available_music_players", JSONArray(players))
+            }
             topApps()?.let { json.put("top_apps_today", it) }
             cached = json.toString()
             cachedAt = now
             cached
         }.getOrDefault("{}")
     }
+
+    private fun getAvailableMusicPlayers(): List<String> = runCatching {
+        val pm = context.packageManager
+        val players = mutableListOf<String>()
+        val common = listOf(
+            "com.android.mediacenter" to "Huawei Music",
+            "com.spotify.music" to "Spotify",
+            "com.google.android.youtube" to "YouTube",
+            "com.kyotoplayer" to "Kyoto Player",
+            "com.brave.browser" to "Brave",
+            "com.android.chrome" to "Chrome",
+        )
+        for ((p, name) in common) {
+            if (runCatching { pm.getPackageInfo(p, 0) }.isSuccess) {
+                players.add("$name ($p)")
+            }
+        }
+        players
+    }.getOrDefault(emptyList())
 
     fun isMusicPlaying(): Boolean = musicPlaying()
 

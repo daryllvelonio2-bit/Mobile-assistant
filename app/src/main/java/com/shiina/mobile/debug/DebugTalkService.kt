@@ -14,8 +14,10 @@ import com.shiina.mobile.CompanionApp
 import com.shiina.mobile.character.CharacterMode
 import com.shiina.mobile.character.CharacterOverlayService
 import com.shiina.mobile.decision.DecisionSummary
+import com.shiina.mobile.decision.ToolCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -165,9 +167,13 @@ class DebugTalkService : Service() {
     }
 
     private fun handleTalk(intent: Intent) {
-        val results = RemoteInput.getResultsFromIntent(intent) ?: return
-        // Audit U5: cap RemoteInput text so a paste bomb can't blow the prompt.
-        val text = results.getCharSequence(KEY_TALK)?.toString()?.trim()?.take(500).orEmpty()
+        // Notification RemoteInput reply, or adb-sent text via AdbTalkReceiver.
+        // Audit U5: cap text so a paste bomb can't blow the prompt.
+        val remote = RemoteInput.getResultsFromIntent(intent)
+            ?.getCharSequence(KEY_TALK)?.toString()?.trim()?.take(500).orEmpty()
+        val text = if (remote.isNotEmpty()) remote else {
+            intent.getStringExtra(EXTRA_ADB_TEXT)?.trim()?.take(500).orEmpty()
+        }
         if (text.isEmpty()) return
         dbg("You: $text")
         val container = (application as CompanionApp).container
@@ -278,6 +284,27 @@ class DebugTalkService : Service() {
                 )
             }
             withContext(Dispatchers.Main) { refresh() }
+            scheduleBackgroundConsolidation()
+        }
+    }
+
+    private var consolidationJob: Job? = null
+
+    /**
+     * Debounced background memory consolidation.
+     * When conversation pauses for 20 seconds, extracts durable facts without
+     * interfering with the user's active conversation turns.
+     */
+    private fun scheduleBackgroundConsolidation() {
+        consolidationJob?.cancel()
+        consolidationJob = scope.launch {
+            delay(20_000L)
+            val container = (application as CompanionApp).container
+            runCatching {
+                container.memoryConsolidator.consolidate()
+            }.onFailure { e ->
+                AppDebugServer.log("ERROR", "Background memory consolidation failed: ${e.message}")
+            }
         }
     }
 
@@ -320,6 +347,43 @@ class DebugTalkService : Service() {
             t.contains("current music") || t.contains("song is playing") ||
             t.contains("music is playing") || t.contains("anong kanta") ||
             t.contains("anong tugtog") || t.contains("anong pinapatugtog")
+    }
+
+    /** Multi-step goals (e.g. playing an anime, watching a video, playing music) require verified completion before DONE. */
+    private fun isMultiStepGoal(userText: String): Boolean {
+        val t = userText.lowercase().trim()
+        if (isStopOrCancelCommand(t)) return false
+        val playVerbs = listOf("play", "watch", "stream", "listen", "put on", "start", "panoorin", "patugtugin", "pakinggan", "manood")
+        return playVerbs.any { verb ->
+            Regex("""\b$verb\b""", RegexOption.IGNORE_CASE).containsMatchIn(t)
+        }
+    }
+
+    private fun isStopOrCancelCommand(text: String): Boolean {
+        val t = text.lowercase().trim()
+        return t in setOf("stop", "cancel", "pause", "nevermind", "wag na", "hinto", "tigil", "exit", "quit") ||
+            t.startsWith("stop ") || t.startsWith("cancel ") || t.startsWith("pause ") || t.startsWith("wag na ")
+    }
+
+    private fun isGoalAchieved(userText: String, steps: List<String>, screenElements: String): Boolean {
+        if (!isMultiStepGoal(userText)) return true
+
+        // 1. Music playback verified via PLAY_MUSIC
+        if (steps.any { it.startsWith("PLAY_MUSIC:") && (it.contains("playing") || it.contains("opened_in_browser")) }) {
+            return true
+        }
+
+        // 2. Video player UI active on screen
+        val screenLower = screenElements.lowercase()
+        val hasPlayerUi = screenLower.contains("pause") || screenLower.contains("player") ||
+            screenLower.contains("seek") || screenLower.contains("rewind") ||
+            screenLower.contains("forward") || screenLower.contains("buffering")
+
+        val tapCount = steps.count { it.startsWith("TAP_SCREEN:") || it.startsWith("INPUT_TEXT:") }
+        val hasOpenedApp = steps.any { it.startsWith("OPEN_APP:") }
+
+        // If app was opened, require verified player UI or sufficient interaction depth (at least 2 taps)
+        return hasOpenedApp && (hasPlayerUi || tapCount >= 2)
     }
 
     /**
@@ -388,6 +452,7 @@ class DebugTalkService : Service() {
         val mood: String = "",
         val status: String = "DONE", // "CONTINUE" or "DONE"
         val tool: String = "NONE",
+        val toolset: String = "",
         val query: String = "",
         val url: String = "",
         val key: String = "",
@@ -395,12 +460,31 @@ class DebugTalkService : Service() {
         val text: String = "",
         val mode: String = "",
         val title: String = "",
+        val action: String = "",
+        val app: String = "",
+        val player: String = "",
+        val filter: String = "",
+        val level: Int = -1,
+        val elementId: Int = -1,
+        val x: Float = -1f,
+        val y: Float = -1f,
+        val startX: Float = -1f,
+        val startY: Float = -1f,
+        val endX: Float = -1f,
+        val endY: Float = -1f,
+        val direction: String = "",
         val message: String = "",
     )
 
     private val KNOWN_TOOLS = setOf(
-        "LEARN", "SEARCH_WEB", "READ_URL", "TAKE_SCREENSHOT", "REMEMBER",
-        "CHECK_GOALS", "SET_REMINDER", "COMPLETE_GOAL", "SET_MODE", "NONE",
+        "GET_TOOLSET",
+        "SEARCH_MUSIC", "PLAY_MUSIC", "MEDIA_CONTROL", "VOLUME_CONTROL",
+        "OPEN_APP", "SEARCH_APP", "LIST_APPS", "GET_DEVICE_STATE",
+        "SEARCH_WEB", "READ_URL", "TAKE_SCREENSHOT", "INSPECT_SCREEN", "REMEMBER",
+        "CHECK_GOALS", "LOG_GOAL", "SET_REMINDER", "COMPLETE_GOAL",
+        "SET_MODE", "DEVICE_ACTION",
+        "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "PRESS_KEY",
+        "NONE",
     )
 
     private fun parseAgentStep(raw: String): AgentStep? {
@@ -442,18 +526,49 @@ class DebugTalkService : Service() {
             if (message.contains("\"candidates\"") || message.contains("\"finishReason\"") || message.contains("\"error\"")) {
                 message = ""
             }
+            val args = json.optJSONObject("tool_args") ?: json
+            val query = args.optString("query", "")
+                .ifEmpty { args.optString("song", "") }
+                .ifEmpty { args.optString("track", "") }
+                .ifEmpty { args.optString("title", "") }
+            val level = args.optInt("level", -1)
+            val elementId = args.optInt("element_id", -1).let { if (it > 0) it else json.optInt("element_id", -1) }
+            val toolset = args.optString("toolset", "")
+                .ifEmpty { json.optString("toolset", "") }
+                .ifEmpty { args.optString("name", "") }
+            val x = args.optDouble("x", -1.0).toFloat()
+            val y = args.optDouble("y", -1.0).toFloat()
+            val startX = args.optDouble("startX", -1.0).toFloat()
+            val startY = args.optDouble("startY", -1.0).toFloat()
+            val endX = args.optDouble("endX", -1.0).toFloat()
+            val endY = args.optDouble("endY", -1.0).toFloat()
+            val direction = args.optString("direction", "")
             AgentStep(
                 thought = json.optString("thought", ""),
                 mood = mood,
                 status = status,
                 tool = tool,
-                query = json.optString("query", ""),
-                url = json.optString("url", ""),
-                key = json.optString("key", ""),
-                value = json.optString("value", ""),
-                text = json.optString("text", ""),
-                mode = json.optString("mode", ""),
-                title = json.optString("title", ""),
+                toolset = toolset,
+                query = query,
+                url = args.optString("url", ""),
+                key = args.optString("key", ""),
+                value = args.optString("value", ""),
+                text = args.optString("text", ""),
+                mode = args.optString("mode", ""),
+                title = args.optString("title", ""),
+                action = args.optString("action", ""),
+                app = args.optString("app", ""),
+                player = args.optString("player", ""),
+                filter = args.optString("filter", ""),
+                level = level,
+                elementId = elementId,
+                x = x,
+                y = y,
+                startX = startX,
+                startY = startY,
+                endX = endX,
+                endY = endY,
+                direction = direction,
                 message = message,
             )
         }.getOrNull()
@@ -558,12 +673,13 @@ class DebugTalkService : Service() {
         var answer = ""
         var calls = 0
         var attachShot = false
-        val MAX_AGENT_STEPS = 8
+        val MAX_AGENT_STEPS = 15
 
         while (calls < MAX_AGENT_STEPS) {
-            val raw = postText(prompt, attachShot)
+            val raw = postText(prompt, attachShot, structuredSchema = true)
             attachShot = false
             val step = parseAgentStep(raw)
+
             if (step != null) {
                 if (step.mood.isNotBlank()) {
                     lastTone = step.mood
@@ -574,45 +690,64 @@ class DebugTalkService : Service() {
                     "Agent step #${calls + 1}: mood=${step.mood}, status=${step.status}, tool=${step.tool}, thought=\"${step.thought.take(80)}\", message=\"${step.message.take(80)}\"",
                 )
             }
+
             if (step == null) {
                 // Direct plain text response from the model
                 answer = raw.trim().take(512)
                 break
             }
 
-            // Capture message from the step
-            if (step.message.isNotBlank()) {
-                answer = step.message.trim()
-                // Only push live interactive progress to overlay for long-running tools (search, screenshot).
-                // Avoid pushing intermediate status for fast local tools (LEARN, REMEMBER, SET_MODE) to prevent duplicate/repetitive messages!
-                if (step.status.equals("CONTINUE", ignoreCase = true) && step.tool in setOf("SEARCH_WEB", "READ_URL", "TAKE_SCREENSHOT")) {
-                    pushTextToOverlay(step.message.trim())
-                    AppDebugServer.log("TALK_INTERACTION", "Agent live status: ${step.message.trim()}")
-                }
-            }
-
-            // Only the AI ends the loop by invoking DONE (or tool is NONE and status != CONTINUE)
-            val isDone = step.status.equals("DONE", ignoreCase = true) ||
-                (step.tool == "NONE" && !step.status.equals("CONTINUE", ignoreCase = true))
+            // Only accept final answer when tool is NONE and status is DONE (or status != CONTINUE).
+            // If a tool was invoked, the loop MUST continue so the agent observes the outcome receipt!
+            val isDone = (step.tool == "NONE" || step.tool.isBlank()) &&
+                (step.status.equals("DONE", ignoreCase = true) || !step.status.equals("CONTINUE", ignoreCase = true))
 
             if (isDone) {
-                // Execute tool if one was specified on the final step (e.g. LEARN, REMEMBER, SET_MODE, COMPLETE_GOAL)
-                if (step.tool != "NONE") {
-                    val result = runTool(step)
-                    runCatching { container.toolTracker.record(step.tool.lowercase(), result.first.isNotEmpty()) }
-                    AppDebugServer.log("TALK_TOOL_FINAL", "Final step tool ${step.tool} -> ${result.first.take(80)}")
+                // Intercept premature completion when user has an active multi-step goal that isn't achieved
+                val screenElements = container.deviceActionController.getScreenElementsSummary()
+                val isPremature = calls < (MAX_AGENT_STEPS - 2) && !isGoalAchieved(userText, steps, screenElements)
+                if (isPremature) {
+                    AppDebugServer.log("TALK_AGENT", "Premature completion rejected for goal: '$userText'. Continuing execution loop.")
+                    calls++
+                    attachShot = true
+                    prompt = buildString {
+                        append(buildBasePrompt(includeTools = true))
+                        appendLine()
+                        appendLine()
+                        appendLine("# Agent Execution State")
+                        appendLine("- Current step: #${calls} of max $MAX_AGENT_STEPS")
+                        appendLine("- Primary Goal: \"$userText\"")
+                        appendLine("- Goal Status: IN PROGRESS (Playback not verified yet. Do NOT set status 'DONE' until content is playing)")
+                        appendLine("- Steps taken so far: ${steps.joinToString("; ").ifEmpty { "none" }}")
+                        if (step.thought.isNotBlank()) {
+                            appendLine("- Your previous thought: ${step.thought}")
+                        }
+                        if (screenElements.isNotBlank() && !screenElements.startsWith("Accessibility service not active") && !screenElements.startsWith("No interactive elements")) {
+                            appendLine()
+                            appendLine("# Screen Grounding Hierarchy")
+                            appendLine(screenElements)
+                        }
+                        appendLine()
+                        appendLine("Instructions: PREMATURE COMPLETION REJECTED. Your primary goal is to \"$userText\". You stopped after merely opening the app or navigating—the anime/video is NOT playing yet! Do NOT stop and do NOT ask the user to do it. Inspect the attached screenshot and # Screen Grounding Hierarchy: select an anime card or title using TAP_SCREEN (with element_id or text), or search using INPUT_TEXT, then tap Play or Episode 1. Keep status 'CONTINUE' until playback is verified on screen.")
+                    }
+                    continue
                 }
-                if (answer.isEmpty() || (answer.startsWith("{") && answer.contains("\"candidates\""))) {
-                    answer = step.message.ifBlank {
-                        if (raw.startsWith("{") && raw.contains("\"candidates\"")) "" else raw
-                    }.trim().take(512)
-                }
+
+                answer = step.message.ifBlank {
+                    if (raw.startsWith("{") && raw.contains("\"candidates\"")) "" else raw
+                }.trim().take(512)
                 AppDebugServer.log("TALK_AGENT", "Agent invoked completion (DONE) at step #${calls + 1}")
                 break
             }
 
+            // Intermediate step: push progress to overlay, but DO NOT overwrite answer
+            if (step.message.isNotBlank()) {
+                pushTextToOverlay(step.message.trim())
+                AppDebugServer.log("TALK_INTERACTION", "Agent progress status: ${step.message.trim()}")
+            }
+
             // Repetition detection
-            val sig = step.tool + "|" + (step.query + step.url + step.key + step.mode + step.title).take(120)
+            val sig = step.tool + "|" + (step.toolset + step.query + step.url + step.key + step.mode + step.title + step.action + step.app + step.player + step.filter + step.level + step.x + step.y + step.text).take(120)
             if (sig == lastSig && step.tool != "NONE") {
                 AppDebugServer.log("TALK_LOOP", "Repetition detected for $sig — breaking loop")
                 break
@@ -621,13 +756,28 @@ class DebugTalkService : Service() {
             calls++
 
             val result = runTool(step)
-            if (result.second) attachShot = true
+            if (result.second || step.tool in setOf("OPEN_APP", "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "TAKE_SCREENSHOT", "INSPECT_SCREEN")) {
+                delay(700)
+                attachShot = true
+            }
             runCatching { container.toolTracker.record(step.tool.lowercase(), result.first.isNotEmpty()) }
-            steps += "${step.tool}: ${result.first.take(100).ifEmpty { "empty" }}"
+            steps += "${step.tool}: ${result.first.take(150).ifEmpty { "empty" }}"
             AppDebugServer.log(
-                "DEBUG_PANEL", "Tool ${step.tool} -> ${result.first.take(80).ifEmpty { "(empty)" }}",
+                "DEBUG_PANEL", "Tool ${step.tool} -> ${result.first.take(120).ifEmpty { "(empty)" }}",
             )
             val feed = result.first.ifEmpty { "no results" }
+
+            val screenElements = if (attachShot || step.tool in setOf("OPEN_APP", "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "TAKE_SCREENSHOT", "INSPECT_SCREEN")) {
+                container.deviceActionController.getScreenElementsSummary()
+            } else ""
+
+            val nextInstruction = when (step.tool) {
+                "OPEN_APP" -> "The app '${step.app.ifEmpty { step.query }}' has been opened. Updated screen image and interactive elements are attached. Ground your next action using 'element_id' (e.g. {\"element_id\": 1}), 'text' (e.g. {\"text\": \"Search\"}), or normalized coordinates 'x', 'y' (0..1000 scale). Execute the next step with status 'CONTINUE'."
+                "TAKE_SCREENSHOT", "INSPECT_SCREEN" -> "Screen state and interactive elements are attached. Ground your next action using 'element_id' from the list, 'text', or 'x', 'y' coordinates. Call 'TAP_SCREEN', 'INPUT_TEXT', or 'SWIPE_SCREEN' with status 'CONTINUE'."
+                "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT" -> "Screen interaction completed with observation: $feed. Updated screen image and interactive elements are attached. If more actions are needed (e.g. typing query, clicking play/card), invoke the tool with status 'CONTINUE'. If your task is complete, set tool to 'NONE' and status to 'DONE'."
+                "PRESS_KEY" -> "Key action '${step.action}' executed. If your task is complete, set tool to 'NONE' and status to 'DONE'."
+                else -> "The action '${step.tool}' completed with observation: $feed. Analyze the observation carefully. If you need to perform the next step (e.g. tapping screen elements, entering text, or adjusting state), invoke that tool with status 'CONTINUE'. If your task is complete, set tool to 'NONE' and status to 'DONE' to deliver your final conversational response in 'message' strictly grounded in what actually happened."
+            }
 
             prompt = buildString {
                 append(buildBasePrompt(includeTools = true))
@@ -635,13 +785,23 @@ class DebugTalkService : Service() {
                 appendLine()
                 appendLine("# Agent Execution State")
                 appendLine("- Current step: #${calls} of max $MAX_AGENT_STEPS")
+                appendLine("- Primary Goal: \"$userText\"")
+                if (isMultiStepGoal(userText)) {
+                    val achieved = isGoalAchieved(userText, steps, screenElements)
+                    appendLine("- Goal Status: ${if (achieved) "PLAYBACK VERIFIED" else "IN PROGRESS (Content not playing yet — keep status 'CONTINUE' until playing)"}")
+                }
                 appendLine("- Steps taken so far: ${steps.joinToString("; ")}")
                 if (step.thought.isNotBlank()) {
                     appendLine("- Your previous thought: ${step.thought}")
                 }
                 appendLine("- Observation from ${step.tool}: $feed")
+                if (screenElements.isNotBlank() && !screenElements.startsWith("Accessibility service not active") && !screenElements.startsWith("No interactive elements")) {
+                    appendLine()
+                    appendLine("# Screen Grounding Hierarchy")
+                    appendLine(screenElements)
+                }
                 appendLine()
-                appendLine("Instructions: The action '${step.tool}' completed. Analyze the observation. Set status to 'DONE' to deliver your final conversational response, or 'CONTINUE' only if another action is strictly needed. Do NOT repeat previous status messages or action confirmations.")
+                appendLine("Instructions: $nextInstruction")
             }
         }
         if (answer.isEmpty() || (answer.startsWith("{") && answer.contains("\"candidates\""))) {
@@ -666,7 +826,11 @@ class DebugTalkService : Service() {
     private suspend fun runTool(step: AgentStep): Pair<String, Boolean> {
         val container = (application as CompanionApp).container
         return when (step.tool) {
-            "LEARN", "REMEMBER" -> {
+            "GET_TOOLSET" -> {
+                val name = step.toolset.ifBlank { step.query.ifBlank { step.text } }
+                ToolCatalog.getToolset(name) to false
+            }
+            "REMEMBER" -> {
                 var k = step.key
                 var v = step.value
                 if (k.isEmpty() || v.isEmpty()) {
@@ -680,10 +844,10 @@ class DebugTalkService : Service() {
                 }
                 if (k.isNotEmpty() && v.isNotEmpty()) {
                     val msg = runCatching {
-                        container.learnedMemoryManager.learn(k, v, "ai_learned")
-                    }.getOrDefault("learned $k")
+                        container.learnedMemoryManager.learn(k, v, "remember_tool")
+                    }.getOrDefault("remembered $k")
                     msg to false
-                } else "learn requires key and value" to false
+                } else "remember requires key and value" to false
             }
             "SEARCH_WEB" ->
                 runCatching { container.webSearch.search(step.query.ifBlank { "latest" }) }
@@ -726,12 +890,93 @@ class DebugTalkService : Service() {
                 startForegroundService(i)
                 "character mode set to ${target.name}" to false
             }
+            "SEARCH_MUSIC" -> {
+                val q = step.query.ifEmpty { step.text }
+                val receipt = container.deviceActionController.searchMusic(q)
+                receipt to false
+            }
+            "PLAY_MUSIC" -> {
+                val q = step.query.ifEmpty { step.text.ifEmpty { step.action } }
+                val receipt = container.deviceActionController.playSong(q, step.player)
+                receipt to false
+            }
+            "VOLUME_CONTROL" -> {
+                val act = step.action.ifEmpty { step.query.ifEmpty { step.text } }
+                val receipt = container.deviceActionController.volumeControl(act, step.level)
+                receipt to false
+            }
+            "DEVICE_ACTION" -> {
+                val act = step.action.ifEmpty { step.query.ifEmpty { step.text } }
+                val receipt = container.deviceActionController.volumeControl(act, step.level)
+                receipt to false
+            }
+            "MEDIA_CONTROL" -> {
+                val act = step.action.ifEmpty { step.text }
+                val q = step.query
+                val receipt = if (q.isNotBlank() && (act.isBlank() || act.equals("play", ignoreCase = true) || act.equals("play_song", ignoreCase = true))) {
+                    container.deviceActionController.playSong(q, step.player)
+                } else if (act.startsWith("play ", ignoreCase = true)) {
+                    container.deviceActionController.playSong(act.removePrefix("play ").trim(), step.player)
+                } else {
+                    container.deviceActionController.controlMedia(act.ifEmpty { q })
+                }
+                receipt to false
+            }
+            "SEARCH_APP" -> {
+                val app = step.app.ifEmpty { "youtube" }
+                val q = step.query.ifEmpty { step.text }
+                val receipt = container.deviceActionController.searchApp(app, q)
+                receipt to false
+            }
+            "LIST_APPS" -> {
+                val f = step.filter.ifEmpty { step.query }
+                val receipt = container.deviceActionController.listApps(f)
+                receipt to false
+            }
+            "GET_DEVICE_STATE" -> {
+                val receipt = container.deviceActionController.getDeviceState()
+                receipt to false
+            }
+            "OPEN_APP" -> {
+                val app = step.app.ifEmpty { step.query.ifEmpty { step.text } }
+                val receipt = container.deviceActionController.openApp(app)
+                receipt to false
+            }
+            "LOG_GOAL" -> {
+                val t = step.title.ifEmpty { step.text.ifEmpty { step.query } }
+                if (t.isNotBlank()) {
+                    runCatching {
+                        container.actionExecutor.execute("log_goal", t)
+                    }
+                    "goal logged: $t" to false
+                } else "log_goal requires a goal title" to false
+            }
+            "INSPECT_SCREEN" -> {
+                val receipt = container.deviceActionController.getScreenElementsSummary()
+                receipt to true
+            }
+            "TAP_SCREEN" -> {
+                val receipt = container.deviceActionController.tapScreen(step.x, step.y, step.text, step.elementId)
+                receipt to false
+            }
+            "SWIPE_SCREEN" -> {
+                val receipt = container.deviceActionController.swipeScreen(step.startX, step.startY, step.endX, step.endY, step.direction)
+                receipt to false
+            }
+            "INPUT_TEXT" -> {
+                val receipt = container.deviceActionController.inputText(step.text.ifEmpty { step.query })
+                receipt to false
+            }
+            "PRESS_KEY" -> {
+                val receipt = container.deviceActionController.pressKey(step.action.ifEmpty { step.query })
+                receipt to false
+            }
             else -> "" to false
         }
     }
 
-    /** Single Gemini text call with optional vision attach. Plain text out. */
-    private suspend fun postText(prompt: String, attachShot: Boolean): String {
+    /** Single Gemini text call with optional vision attach and optional JSON schema enforcement. */
+    private suspend fun postText(prompt: String, attachShot: Boolean, structuredSchema: Boolean = false): String {
         AppDebugServer.log(
             "GEMINI_TALK_REQUEST",
             "Talk prompt:\n$prompt" + if (attachShot) " [screenshot attached]" else "",
@@ -758,19 +1003,77 @@ class DebugTalkService : Service() {
                 }
             }
         }
+
+        val requestBody = JSONObject()
+            .put("contents", org.json.JSONArray().put(JSONObject().put("parts", parts)))
+
+        if (structuredSchema) {
+            val toolEnum = org.json.JSONArray()
+            for (t in KNOWN_TOOLS) {
+                toolEnum.put(t)
+            }
+            val moodEnum = org.json.JSONArray().put("calm").put("candid").put("warm").put("firm").put("pouty")
+            val statusEnum = org.json.JSONArray().put("CONTINUE").put("DONE")
+
+            val toolArgsSchema = JSONObject()
+                .put("type", "OBJECT")
+                .put(
+                    "properties",
+                    JSONObject()
+                        .put("toolset", JSONObject().put("type", "STRING"))
+                        .put("query", JSONObject().put("type", "STRING"))
+                        .put("action", JSONObject().put("type", "STRING"))
+                        .put("app", JSONObject().put("type", "STRING"))
+                        .put("filter", JSONObject().put("type", "STRING"))
+                        .put("player", JSONObject().put("type", "STRING"))
+                        .put("level", JSONObject().put("type", "INTEGER"))
+                        .put("title", JSONObject().put("type", "STRING"))
+                        .put("url", JSONObject().put("type", "STRING"))
+                        .put("mode", JSONObject().put("type", "STRING"))
+                        .put("element_id", JSONObject().put("type", "INTEGER"))
+                        .put("x", JSONObject().put("type", "NUMBER"))
+                        .put("y", JSONObject().put("type", "NUMBER"))
+                        .put("startX", JSONObject().put("type", "NUMBER"))
+                        .put("startY", JSONObject().put("type", "NUMBER"))
+                        .put("endX", JSONObject().put("type", "NUMBER"))
+                        .put("endY", JSONObject().put("type", "NUMBER"))
+                        .put("text", JSONObject().put("type", "STRING"))
+                        .put("direction", JSONObject().put("type", "STRING")),
+                )
+
+            val stepSchema = JSONObject()
+                .put("type", "OBJECT")
+                .put(
+                    "properties",
+                    JSONObject()
+                        .put("thought", JSONObject().put("type", "STRING"))
+                        .put("mood", JSONObject().put("type", "STRING").put("enum", moodEnum))
+                        .put("status", JSONObject().put("type", "STRING").put("enum", statusEnum))
+                        .put("tool", JSONObject().put("type", "STRING").put("enum", toolEnum))
+                        .put("tool_args", toolArgsSchema)
+                        .put("message", JSONObject().put("type", "STRING")),
+                )
+                .put(
+                    "required",
+                    org.json.JSONArray()
+                        .put("thought")
+                        .put("status")
+                        .put("tool")
+                        .put("message"),
+                )
+
+            requestBody.put(
+                "generationConfig",
+                JSONObject()
+                    .put("response_mime_type", "application/json")
+                    .put("response_schema", stepSchema),
+            )
+        }
+
         for (attempt in 1..2) {
             val request = Request.Builder()
                 .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$key")
-                .post(
-                    JSONObject()
-                        .put(
-                            "contents", org.json.JSONArray().put(
-                                JSONObject().put("parts", parts),
-                            ),
-                        )
-                        .toString()
-                        .toRequestBody("application/json".toMediaType()),
-                )
+                .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             val raw = runCatching {
                 http.newCall(request).execute().use { response ->
@@ -958,6 +1261,7 @@ class DebugTalkService : Service() {
         const val ACTION_RESET_SESSION = "com.shiina.mobile.debug.RESET_SESSION"
         const val ACTION_BOOT_GREETING = "com.shiina.mobile.debug.BOOT_GREETING"
         const val KEY_TALK = "key_talk"
+        const val EXTRA_ADB_TEXT = "adb_text"
         const val MAX_TOOL_CALLS = 4
 
         fun start(context: Context) {

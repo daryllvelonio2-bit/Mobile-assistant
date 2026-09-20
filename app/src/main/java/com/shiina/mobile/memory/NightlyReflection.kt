@@ -30,6 +30,7 @@ class NightlyReflection(
     private val memoryStore: MemoryStore,
     private val compactor: MemoryCompactor,
     private val toolStatDao: ToolStatDao? = null,
+    private val memoryConsolidator: MemoryConsolidator? = null,
 ) {
 
     suspend fun run() {
@@ -45,6 +46,9 @@ class NightlyReflection(
         toolStatsReport()
         runCatching { compactor.run(now) }.onFailure { e ->
             AppDebugServer.log("ERROR", "Compaction failed: ${e.message}")
+        }
+        runCatching { memoryConsolidator?.consolidate(force = true) }.onFailure { e ->
+            AppDebugServer.log("ERROR", "Nightly consolidation failed: ${e.message}")
         }
         prune(now)
         AppDebugServer.log("MEMORY", "NightlyReflection done (${episodes.size} episodes reviewed)")

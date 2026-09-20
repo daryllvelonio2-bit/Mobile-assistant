@@ -1,0 +1,870 @@
+package com.shiina.mobile.action
+
+import android.app.SearchManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.MediaStore
+import android.view.KeyEvent
+import com.shiina.mobile.debug.AppDebugServer
+import com.shiina.mobile.observation.MusicNotificationListener
+import com.shiina.mobile.observation.MusicTracker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Executes on-device actions such as media playback control, volume/audio adjustments,
+ * and app launching. Bridges autonomous LLM agent decisions with real Android hardware & system services.
+ */
+class DeviceActionController(private val context: Context) {
+    private val scope = CoroutineScope(Dispatchers.Main)
+
+    /**
+     * Searches local MediaStore audio library (Downloads, Music) and returns structured candidate tracks.
+     * Affordance: inspect library before deciding or playing.
+     */
+    fun searchMusic(query: String = ""): String {
+        val rawQ = query.trim()
+        val q = rawQ.replace(Regex("""^["'`“]+|["'`”.,!]+$"""), "").trim()
+        AppDebugServer.log("ACTION", "Executing searchMusic: '$q'")
+        val results = JSONArray()
+        val isBrowseAll = q.isBlank() || q.lowercase() in setOf("all", "list", "*", "any", "recent")
+
+        runCatching {
+            val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.TITLE,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.ARTIST,
+                MediaStore.Audio.Media.DURATION,
+            )
+
+            var cursor: android.database.Cursor?
+            if (isBrowseAll) {
+                cursor = context.contentResolver.query(
+                    uri, projection, null, null, "${MediaStore.Audio.Media.DATE_ADDED} DESC",
+                )
+            } else {
+                val selection = "${MediaStore.Audio.Media.TITLE} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.ARTIST} LIKE ?"
+                val arg = "%$q%"
+                cursor = context.contentResolver.query(
+                    uri, projection, selection, arrayOf(arg, arg, arg), null,
+                )
+
+                if (cursor == null || !cursor.moveToFirst()) {
+                    cursor?.close()
+                    val words = q.split(Regex("""[\s\-_]+""")).map { it.trim().lowercase() }
+                        .filter { it.length > 2 && it !in setOf("the", "song", "track", "play", "please", "gusto", "kanta", "official", "video", "audio") }
+                    if (words.size > 1) {
+                        val sb = java.lang.StringBuilder()
+                        val args = mutableListOf<String>()
+                        words.forEachIndexed { index, w ->
+                            if (index > 0) sb.append(" AND ")
+                            sb.append("(${MediaStore.Audio.Media.TITLE} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.ARTIST} LIKE ?)")
+                            args.add("%$w%")
+                            args.add("%$w%")
+                            args.add("%$w%")
+                        }
+                        cursor = context.contentResolver.query(uri, projection, sb.toString(), args.toTypedArray(), null)
+                    } else {
+                        cursor = null
+                    }
+                }
+            }
+
+            cursor?.use {
+                val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                val titleCol = it.getColumnIndex(MediaStore.Audio.Media.TITLE)
+                val artistCol = it.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+                val durCol = it.getColumnIndex(MediaStore.Audio.Media.DURATION)
+
+                var count = 0
+                val limit = if (isBrowseAll) 20 else 10
+                while (it.moveToNext() && count < limit) {
+                    val id = it.getLong(idCol)
+                    val title = if (titleCol >= 0) it.getString(titleCol) else ""
+                    val artist = if (artistCol >= 0) it.getString(artistCol) else ""
+                    val durSec = if (durCol >= 0) it.getLong(durCol) / 1000 else 0L
+                    results.put(
+                        JSONObject()
+                            .put("id", id)
+                            .put("title", title)
+                            .put("artist", artist)
+                            .put("duration_sec", durSec)
+                    )
+                    count++
+                }
+            }
+        }.onFailure { e ->
+            AppDebugServer.log("ACTION", "searchMusic failed: ${e.message}")
+        }
+
+        // If specific search returned 0 tracks, also fetch top available tracks from library as fallback
+        val availableFallback = JSONArray()
+        if (results.length() == 0 && !isBrowseAll) {
+            runCatching {
+                val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                val projection = arrayOf(
+                    MediaStore.Audio.Media._ID,
+                    MediaStore.Audio.Media.TITLE,
+                    MediaStore.Audio.Media.ARTIST,
+                    MediaStore.Audio.Media.DURATION,
+                )
+                context.contentResolver.query(
+                    uri, projection, null, null, "${MediaStore.Audio.Media.DATE_ADDED} DESC",
+                )?.use {
+                    val idCol = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+                    val titleCol = it.getColumnIndex(MediaStore.Audio.Media.TITLE)
+                    val artistCol = it.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+                    val durCol = it.getColumnIndex(MediaStore.Audio.Media.DURATION)
+                    var count = 0
+                    while (it.moveToNext() && count < 10) {
+                        availableFallback.put(
+                            JSONObject()
+                                .put("id", it.getLong(idCol))
+                                .put("title", if (titleCol >= 0) it.getString(titleCol) else "")
+                                .put("artist", if (artistCol >= 0) it.getString(artistCol) else "")
+                                .put("duration_sec", if (durCol >= 0) it.getLong(durCol) / 1000 else 0L)
+                        )
+                        count++
+                    }
+                }
+            }
+        }
+
+        val json = JSONObject()
+            .put("tool", "SEARCH_MUSIC")
+            .put("query", q)
+            .put("count", results.length())
+            .put("tracks", results)
+
+        if (availableFallback.length() > 0) {
+            json.put("available_tracks", availableFallback)
+            json.put("note", "No local tracks matched '$q'. However, here are ${availableFallback.length()} available tracks in the local library you can pick from instead, or you can play '$q' via YouTube streaming.")
+        } else if (results.length() > 0) {
+            json.put("note", "Found ${results.length()} matching local track(s).")
+        } else {
+            json.put("note", "No local tracks found. Can play via YouTube streaming.")
+        }
+
+        return json.toString()
+    }
+
+    /**
+     * Controls active media playback (pause, play/resume, stop, next, prev).
+     * If a specific song query is provided or action is "play <song>", delegates to playSong.
+     */
+    fun controlMedia(action: String, query: String = ""): String {
+        val act = action.lowercase().trim()
+        val q = query.trim()
+        if (act in setOf("restore", "unmute", "restore_volume", "put back volume", "put_back_volume")) {
+            return volumeControl("restore")
+        }
+        if (q.isNotEmpty() && (act == "play" || act == "play_song" || act.isEmpty())) {
+            return playSong(q)
+        }
+        if (act.startsWith("play ") && act.length > 5) {
+            return playSong(act.removePrefix("play ").trim())
+        }
+
+        AppDebugServer.log("ACTION", "Executing MEDIA_CONTROL: $act")
+        var sessionControlled = false
+
+        // 1. Try active MediaSessions via MediaSessionManager
+        runCatching {
+            val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
+            val component = ComponentName(context, MusicNotificationListener::class.java)
+            val controllers = msm?.getActiveSessions(component)
+            if (!controllers.isNullOrEmpty()) {
+                for (controller in controllers) {
+                    when (act) {
+                        "pause", "stop", "off", "turn_off", "turn off" -> controller.transportControls.pause()
+                        "play", "resume", "start", "on", "turn_on", "turn on" -> controller.transportControls.play()
+                        "next", "skip" -> controller.transportControls.skipToNext()
+                        "prev", "previous", "back" -> controller.transportControls.skipToPrevious()
+                        "toggle" -> {
+                            if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                                controller.transportControls.pause()
+                            } else {
+                                controller.transportControls.play()
+                            }
+                        }
+                    }
+                    sessionControlled = true
+                }
+            }
+        }.onFailure { e ->
+            AppDebugServer.log("ACTION", "MediaSession control failed: ${e.message}")
+        }
+
+        // 2. Dispatch MediaKeyEvent via AudioManager
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val keyCode = when (act) {
+            "pause", "off", "turn_off", "turn off" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "play", "resume", "start", "on", "turn_on", "turn on" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
+            "next", "skip" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            "prev", "previous", "back" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            else -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+        }
+        audioManager?.let { am ->
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        }
+
+        // 3. For pause/stop/off: transiently request audio focus to immediately silence any stubborn audio stream
+        if (act in setOf("pause", "stop", "off", "turn_off", "turn off")) {
+            audioManager?.let { am ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).build()
+                    am.requestAudioFocus(focusRequest)
+                    scope.launch {
+                        delay(600)
+                        am.abandonAudioFocusRequest(focusRequest)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                }
+            }
+            MusicTracker.updateTrack("", "", "", isPlaying = false, app = "")
+        }
+
+        val isMusicActive = audioManager?.isMusicActive ?: false
+        val statusJson = JSONObject()
+            .put("tool", "MEDIA_CONTROL")
+            .put("action", act)
+            .put("success", true)
+            .put("is_music_active", isMusicActive)
+            .put("state", when (act) {
+                "pause", "off", "turn_off", "turn off" -> "paused"
+                "play", "resume", "start", "on", "turn_on", "turn on" -> "playing"
+                "stop" -> "stopped"
+                "next", "skip" -> "skipped_next"
+                "prev", "previous", "back" -> "skipped_prev"
+                else -> act
+            })
+        return statusJson.toString()
+    }
+
+    /**
+     * Plays a specific song, artist, album, or playlist.
+     * 1. If player is explicitly requested (youtube/spotify), routes there.
+     * 2. Searches local MediaStore audio library (e.g. Download/Music folder) and plays directly in music player.
+     * 3. Falls back to YouTube / streaming search in browser or app (with honest receipt).
+     */
+    fun playSong(query: String, player: String = ""): String {
+        val rawQ = query.trim()
+        val q = rawQ.replace(Regex("""^["'`“]+|["'`”.,!]+$"""), "").trim()
+        if (q.isBlank()) return controlMedia("play")
+        AppDebugServer.log("ACTION", "Executing playSong: '$q' (player='$player')")
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+        // 1. Explicit player routing
+        if (player.equals("youtube", ignoreCase = true)) {
+            return searchApp("youtube", q)
+        }
+        if (player.equals("spotify", ignoreCase = true)) {
+            return searchApp("spotify", q)
+        }
+
+        // 2. Search local on-device audio library (MediaStore)
+        runCatching {
+            val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            val projection = arrayOf(
+                MediaStore.Audio.Media._ID,
+                MediaStore.Audio.Media.TITLE,
+                MediaStore.Audio.Media.DISPLAY_NAME,
+                MediaStore.Audio.Media.ARTIST,
+            )
+            val selection = "${MediaStore.Audio.Media.TITLE} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.ARTIST} LIKE ?"
+            val arg = "%$q%"
+            var cursor = context.contentResolver.query(
+                uri, projection, selection, arrayOf(arg, arg, arg), null,
+            )
+
+            if (cursor == null || !cursor.moveToFirst()) {
+                cursor?.close()
+                val words = q.split(Regex("""[\s\-_]+""")).map { it.trim().lowercase() }
+                    .filter { it.length > 2 && it !in setOf("the", "song", "track", "play", "please", "gusto", "kanta", "official", "video", "audio") }
+                if (words.size > 1) {
+                    val sb = java.lang.StringBuilder()
+                    val args = mutableListOf<String>()
+                    words.forEachIndexed { index, w ->
+                        if (index > 0) sb.append(" AND ")
+                        sb.append("(${MediaStore.Audio.Media.TITLE} LIKE ? OR ${MediaStore.Audio.Media.DISPLAY_NAME} LIKE ? OR ${MediaStore.Audio.Media.ARTIST} LIKE ?)")
+                        args.add("%$w%")
+                        args.add("%$w%")
+                        args.add("%$w%")
+                    }
+                    cursor = context.contentResolver.query(uri, projection, sb.toString(), args.toTypedArray(), null)
+                } else {
+                    cursor = null
+                }
+            }
+
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID))
+                    val titleCol = it.getColumnIndex(MediaStore.Audio.Media.TITLE)
+                    val artistCol = it.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+                    val title = if (titleCol >= 0) it.getString(titleCol) else q
+                    val artist = if (artistCol >= 0) it.getString(artistCol) else ""
+                    val contentUri = android.content.ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
+
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(contentUri, "audio/*")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    if (intent.resolveActivity(context.packageManager) != null) {
+                        context.startActivity(intent)
+                        AppDebugServer.log("ACTION", "Playing local audio: $title (uri=$contentUri)")
+                        return JSONObject()
+                            .put("tool", "PLAY_MUSIC")
+                            .put("status", "playing")
+                            .put("source", "local_storage")
+                            .put("track", title)
+                            .put("artist", artist)
+                            .put("uri", contentUri.toString())
+                            .put("is_music_active", true)
+                            .put("note", "Local track '$title' by '$artist' started playing in device audio player.")
+                            .toString()
+                    }
+                }
+            }
+        }.onFailure { e ->
+            AppDebugServer.log("ACTION", "Local MediaStore search failed: ${e.message}")
+        }
+
+        // 3. If NOT found in local library, DO NOT pretend it played!
+        // Launch YouTube streaming search in browser so the song actually plays.
+        val ytUri = Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(q)}")
+        val intent = Intent(Intent.ACTION_VIEW, ytUri).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(intent)
+            AppDebugServer.log("ACTION", "Opened YouTube search in browser for: $q")
+            return JSONObject()
+                .put("tool", "PLAY_MUSIC")
+                .put("status", "not_found_locally")
+                .put("action_taken", "opened_in_browser")
+                .put("query", q)
+                .put("streaming_url", ytUri.toString())
+                .put("is_music_active", am?.isMusicActive == true)
+                .put("note", "Track '$q' was not found in local files. Opened YouTube search in the browser so the user can play it. Tell the user you opened it on YouTube since it wasn't downloaded.")
+                .toString()
+        }
+
+        return JSONObject()
+            .put("tool", "PLAY_MUSIC")
+            .put("status", "not_found")
+            .put("query", q)
+            .put("is_music_active", am?.isMusicActive == true)
+            .put("note", "Could not find local track for \"$q\" and no browser available to stream it.")
+            .toString()
+    }
+
+    /**
+     * Searches directly inside specific applications (YouTube, Spotify, Browser, Maps, Play Store).
+     */
+    fun searchApp(app: String, query: String): String {
+        val target = app.lowercase().trim()
+        val q = query.trim()
+        AppDebugServer.log("ACTION", "Executing searchApp: $target for '$q'")
+
+        when (target) {
+            "youtube" -> {
+                val ytUri = Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(q)}")
+                val intent = Intent(Intent.ACTION_VIEW, ytUri).apply {
+                    `package` = "com.google.android.youtube"
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "YouTube").put("query", q).put("success", true).toString()
+                }
+                val webIntent = Intent(Intent.ACTION_VIEW, ytUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (webIntent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(webIntent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "YouTube (browser)").put("query", q).put("success", true).toString()
+                }
+            }
+            "spotify" -> {
+                val spotifyUri = Uri.parse("spotify:search:${Uri.encode(q)}")
+                val intent = Intent(Intent.ACTION_VIEW, spotifyUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "Spotify").put("query", q).put("success", true).toString()
+                }
+            }
+            "browser", "chrome", "brave", "web" -> {
+                val searchUri = Uri.parse("https://www.google.com/search?q=${Uri.encode(q)}")
+                val intent = Intent(Intent.ACTION_VIEW, searchUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "Browser").put("query", q).put("success", true).toString()
+                }
+            }
+            "maps", "google maps" -> {
+                val mapUri = Uri.parse("geo:0,0?q=${Uri.encode(q)}")
+                val intent = Intent(Intent.ACTION_VIEW, mapUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "Maps").put("query", q).put("success", true).toString()
+                }
+            }
+            "playstore", "play store" -> {
+                val playUri = Uri.parse("market://search?q=${Uri.encode(q)}")
+                val intent = Intent(Intent.ACTION_VIEW, playUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "SEARCH_APP").put("app", "Play Store").put("query", q).put("success", true).toString()
+                }
+            }
+        }
+        return JSONObject().put("tool", "SEARCH_APP").put("app", app).put("query", q).put("success", false).put("message", "could not search in $app").toString()
+    }
+
+    /**
+     * Lists installed applications on the device, optionally filtered by category (music, browser, media, all).
+     */
+    fun listApps(filter: String = ""): String {
+        val f = filter.lowercase().trim()
+        AppDebugServer.log("ACTION", "Executing listApps: filter='$f'")
+        val pm = context.packageManager
+        val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        val matches = mutableListOf<String>()
+
+        for (pkg in packages) {
+            val label = pm.getApplicationLabel(pkg).toString()
+            val pName = pkg.packageName
+            val isSystem = (pkg.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+
+            when (f) {
+                "music", "audio", "media" -> {
+                    if (pName.contains("music") || pName.contains("audio") || pName.contains("player") ||
+                        pName.contains("spotify") || pName.contains("youtube") || pName.contains("mediacenter") ||
+                        label.contains("music", ignoreCase = true) || label.contains("player", ignoreCase = true)
+                    ) {
+                        matches.add("$label ($pName)")
+                    }
+                }
+                "browser" -> {
+                    if (pName.contains("browser") || pName.contains("chrome") || label.contains("browser", ignoreCase = true)) {
+                        matches.add("$label ($pName)")
+                    }
+                }
+                else -> {
+                    if (!isSystem || pName.contains("chrome") || pName.contains("mediacenter") || pName.contains("camera")) {
+                        if (f.isEmpty() || label.contains(f, ignoreCase = true) || pName.contains(f)) {
+                            matches.add("$label ($pName)")
+                        }
+                    }
+                }
+            }
+        }
+        val array = JSONArray()
+        matches.take(20).forEach { array.put(it) }
+        return JSONObject()
+            .put("tool", "LIST_APPS")
+            .put("filter", f)
+            .put("count", matches.size)
+            .put("apps", array)
+            .toString()
+    }
+
+    /**
+     * Returns detailed live device status (volume levels, ringer mode, active playback state).
+     */
+    fun getDeviceState(): String {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val mediaVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
+        val maxMediaVol = am?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: -1
+        val ringerMode = when (am?.ringerMode) {
+            AudioManager.RINGER_MODE_SILENT -> "silent"
+            AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+            else -> "normal"
+        }
+        val isMusicActive = am?.isMusicActive ?: false
+        val currentTrack = MusicTracker.currentTrack
+        val trackDesc = if (currentTrack != null && isMusicActive) {
+            "\"${currentTrack.title}\" by ${currentTrack.artist} (${currentTrack.app})"
+        } else if (isMusicActive) "active (metadata loading)" else "none"
+
+        return JSONObject()
+            .put("tool", "GET_DEVICE_STATE")
+            .put("media_volume", "$mediaVol/$maxMediaVol")
+            .put("ringer_mode", ringerMode)
+            .put("music", trackDesc)
+            .put("is_music_active", isMusicActive)
+            .toString()
+    }
+
+    /**
+     * Dedicated audio & volume control.
+     * Actions: restore, mute, unmute, volume_up, volume_down, set (with level: 0..100).
+     */
+    fun volumeControl(action: String, level: Int = -1): String {
+        val act = action.lowercase().trim()
+        AppDebugServer.log("ACTION", "Executing volumeControl: action='$act', level=$level")
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            ?: return JSONObject().put("tool", "VOLUME_CONTROL").put("error", "audio service unavailable").toString()
+        val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val prev = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+
+        when {
+            act in setOf("mute", "silence", "quiet") -> {
+                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, AudioManager.FLAG_SHOW_UI)
+            }
+            act in setOf("unmute", "restore", "restore_volume", "restore volume", "put_back_volume", "put back volume", "un-mute") -> {
+                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, AudioManager.FLAG_SHOW_UI)
+                if (prev <= 0) {
+                    am.setStreamVolume(AudioManager.STREAM_MUSIC, (max / 2).coerceAtLeast(1), AudioManager.FLAG_SHOW_UI)
+                }
+            }
+            act in setOf("volume_up", "volume up", "louder", "raise", "increase", "up", "lakasan") || act.startsWith("volume_up") -> {
+                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+            }
+            act in setOf("volume_down", "volume down", "quieter", "lower", "decrease", "down", "hinaan") || act.startsWith("volume_down") -> {
+                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+            }
+            act.startsWith("set") || level >= 0 || act.startsWith("volume_") -> {
+                val targetPct = if (level >= 0) level else act.filter { it.isDigit() }.toIntOrNull() ?: 50
+                val target = (targetPct * max / 100).coerceIn(0, max)
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
+            }
+        }
+
+        val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        return JSONObject()
+            .put("tool", "VOLUME_CONTROL")
+            .put("action", act)
+            .put("previous_volume", prev)
+            .put("current_volume", cur)
+            .put("max_volume", max)
+            .put("is_muted", cur == 0)
+            .put("success", true)
+            .toString()
+    }
+
+    /** Legacy alias for volumeControl. */
+    fun deviceAction(action: String): String = volumeControl(action)
+
+    /**
+     * Finds and opens an installed application matching query by label or package name.
+     */
+    fun openApp(query: String): String {
+        val target = query.lowercase().trim()
+        if (target.isBlank()) return JSONObject().put("tool", "OPEN_APP").put("success", false).put("message", "no app name specified").toString()
+        AppDebugServer.log("ACTION", "Executing OPEN_APP: $target")
+        val pm = context.packageManager
+        val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+
+        // 1. Direct package match
+        val directPkg = packages.firstOrNull { it.packageName.equals(target, ignoreCase = true) }
+        if (directPkg != null) {
+            val intent = pm.getLaunchIntentForPackage(directPkg.packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                return JSONObject().put("tool", "OPEN_APP").put("app", pm.getApplicationLabel(directPkg).toString()).put("package", directPkg.packageName).put("success", true).toString()
+            }
+        }
+
+        // 2. Match label (e.g. "spotify", "youtube", "chrome")
+        val labelMatch = packages.firstOrNull {
+            val label = pm.getApplicationLabel(it).toString().lowercase()
+            label == target || label.contains(target) || target.contains(label)
+        }
+        if (labelMatch != null) {
+            val intent = pm.getLaunchIntentForPackage(labelMatch.packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                return JSONObject().put("tool", "OPEN_APP").put("app", pm.getApplicationLabel(labelMatch).toString()).put("package", labelMatch.packageName).put("success", true).toString()
+            }
+        }
+
+        // 3. Fallback partial package match (e.g. "com.spotify.music" matches "spotify")
+        val pkgMatch = packages.firstOrNull { it.packageName.lowercase().contains(target) }
+        if (pkgMatch != null) {
+            val intent = pm.getLaunchIntentForPackage(pkgMatch.packageName)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+                return JSONObject().put("tool", "OPEN_APP").put("app", pm.getApplicationLabel(pkgMatch).toString()).put("package", pkgMatch.packageName).put("success", true).toString()
+            }
+        }
+
+        return JSONObject().put("tool", "OPEN_APP").put("app", target).put("success", false).put("message", "could not find app matching \"$target\"").toString()
+    }
+
+    /**
+     * Dumps a human-readable and model-friendly summary of the active screen elements,
+     * including display dimensions, interactive element IDs, labels, types, and coordinates.
+     */
+    fun getScreenElementsSummary(): String {
+        val service = ShiinaAccessibilityService.instance ?: return "Accessibility service not active"
+        val elements = service.dumpInteractiveElements()
+        if (elements.isEmpty()) return "No interactive elements detected on screen"
+        val dm = context.resources.displayMetrics
+        val sb = StringBuilder()
+        sb.append("Display Resolution: ${dm.widthPixels}x${dm.heightPixels}\n")
+        sb.append("Interactive Elements (${elements.size}):\n")
+        elements.take(35).forEach { elem ->
+            val label = when {
+                elem.text.isNotBlank() && elem.desc.isNotBlank() && elem.text != elem.desc -> "\"${elem.text}\" (${elem.desc})"
+                elem.text.isNotBlank() -> "\"${elem.text}\""
+                elem.desc.isNotBlank() -> "[desc: \"${elem.desc}\"]"
+                elem.isEditable -> "[Editable Input]"
+                else -> "[${elem.type}]"
+            }
+            val flags = mutableListOf<String>()
+            if (elem.isClickable) flags.add("clickable")
+            if (elem.isEditable) flags.add("editable")
+            val flagStr = if (flags.isNotEmpty()) " (${flags.joinToString(",")})" else ""
+            sb.append("- [${elem.id}] $label at (${elem.centerX}, ${elem.centerY})$flagStr\n")
+        }
+        return sb.toString().trim()
+    }
+
+    /**
+     * Taps the screen targeting by element ID, text matching, or coordinates.
+     * Grounding priority:
+     * 1. elementId: Clicks exact cached node or taps exact center coordinates from screen hierarchy.
+     * 2. text: Matches text in accessibility node hierarchy with physical tap fallback.
+     * 3. coordinates (x, y): Normalized (0..1000) or physical screen pixels.
+     */
+    suspend fun tapScreen(x: Float, y: Float, text: String = "", elementId: Int = -1): String {
+        AppDebugServer.log("ACTION", "Executing TAP_SCREEN: elementId=$elementId, text='$text', x=$x, y=$y")
+        val service = ShiinaAccessibilityService.instance
+
+        // 1. Target by elementId if provided (most precise)
+        if (service != null && elementId > 0) {
+            val clicked = service.clickElementById(elementId)
+            if (clicked) {
+                return JSONObject()
+                    .put("tool", "TAP_SCREEN")
+                    .put("success", true)
+                    .put("method", "accessibility_element_id")
+                    .put("element_id", elementId)
+                    .toString()
+            }
+        }
+
+        // 2. Target by text if provided
+        if (service != null && text.isNotBlank()) {
+            val clickedByText = service.clickText(text)
+            if (clickedByText) {
+                return JSONObject()
+                    .put("tool", "TAP_SCREEN")
+                    .put("success", true)
+                    .put("method", "accessibility_text")
+                    .put("text", text)
+                    .toString()
+            }
+        }
+
+        val dm = context.resources.displayMetrics
+        val screenWidth = dm.widthPixels.toFloat()
+        val screenHeight = dm.heightPixels.toFloat()
+
+        // Normalize coordinates: if coordinates are in 0..1000 scale (standard LLM vision output),
+        // map them to actual device resolution (e.g. 1080x2310)
+        val targetX = if (x in 0f..1000f && y in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) {
+            (x / 1000f) * screenWidth
+        } else {
+            x
+        }
+        val targetY = if (x in 0f..1000f && y in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) {
+            (y / 1000f) * screenHeight
+        } else {
+            y
+        }
+
+        if (service != null && targetX >= 0 && targetY >= 0) {
+            val tapped = service.tap(targetX, targetY)
+            if (tapped) {
+                return JSONObject()
+                    .put("tool", "TAP_SCREEN")
+                    .put("success", true)
+                    .put("method", "accessibility_gesture")
+                    .put("target_x", targetX)
+                    .put("target_y", targetY)
+                    .put("raw_x", x)
+                    .put("raw_y", y)
+                    .toString()
+            }
+        }
+
+        // Fallback: attempt shell command if running with shell/ADB privileges
+        if (targetX >= 0 && targetY >= 0) {
+            val shellOk = runCatching {
+                val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input tap ${targetX.toInt()} ${targetY.toInt()}"))
+                p.waitFor() == 0
+            }.getOrDefault(false)
+            if (shellOk) {
+                return JSONObject()
+                    .put("tool", "TAP_SCREEN")
+                    .put("success", true)
+                    .put("method", "shell")
+                    .put("target_x", targetX)
+                    .put("target_y", targetY)
+                    .toString()
+            }
+        }
+
+        return JSONObject()
+            .put("tool", "TAP_SCREEN")
+            .put("success", false)
+            .put("error", "Could not tap screen. Ensure Accessibility Service is enabled in Settings.")
+            .toString()
+    }
+
+    /**
+     * Swipes the screen between coordinates or in a given direction.
+     */
+    suspend fun swipeScreen(startX: Float, startY: Float, endX: Float, endY: Float, direction: String = ""): String {
+        AppDebugServer.log("ACTION", "Executing SWIPE_SCREEN: ($startX, $startY) -> ($endX, $endY), direction='$direction'")
+        val dm = context.resources.displayMetrics
+        val screenWidth = dm.widthPixels.toFloat()
+        val screenHeight = dm.heightPixels.toFloat()
+
+        var sX = if (startX in 0f..1000f && startY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (startX / 1000f) * screenWidth else startX
+        var sY = if (startX in 0f..1000f && startY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (startY / 1000f) * screenHeight else startY
+        var eX = if (endX in 0f..1000f && endY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (endX / 1000f) * screenWidth else endX
+        var eY = if (endX in 0f..1000f && endY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (endY / 1000f) * screenHeight else endY
+
+        if (sX < 0 || sY < 0 || eX < 0 || eY < 0) {
+            val cx = screenWidth / 2f
+            val cy = screenHeight / 2f
+            when (direction.lowercase().trim()) {
+                "up" -> { sX = cx; sY = cy + 400f; eX = cx; eY = cy - 400f }
+                "down" -> { sX = cx; sY = cy - 400f; eX = cx; eY = cy + 400f }
+                "left" -> { sX = cx + 300f; sY = cy; eX = cx - 300f; eY = cy }
+                "right" -> { sX = cx - 300f; sY = cy; eX = cx + 300f; eY = cy }
+                else -> { sX = cx; sY = cy + 400f; eX = cx; eY = cy - 400f }
+            }
+        }
+
+        val service = ShiinaAccessibilityService.instance
+        if (service != null) {
+            val swiped = service.swipe(sX, sY, eX, eY)
+            if (swiped) {
+                return JSONObject()
+                    .put("tool", "SWIPE_SCREEN")
+                    .put("success", true)
+                    .put("method", "accessibility_gesture")
+                    .put("startX", sX)
+                    .put("startY", sY)
+                    .put("endX", eX)
+                    .put("endY", eY)
+                    .toString()
+            }
+        }
+
+        val shellOk = runCatching {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input swipe ${sX.toInt()} ${sY.toInt()} ${eX.toInt()} ${eY.toInt()} 300"))
+            p.waitFor() == 0
+        }.getOrDefault(false)
+        if (shellOk) {
+            return JSONObject()
+                .put("tool", "SWIPE_SCREEN")
+                .put("success", true)
+                .put("method", "shell")
+                .put("startX", sX)
+                .put("startY", sY)
+                .put("endX", eX)
+                .put("endY", eY)
+                .toString()
+        }
+
+        return JSONObject()
+            .put("tool", "SWIPE_SCREEN")
+            .put("success", false)
+            .put("error", "Accessibility Service is not enabled. Please enable 'Shiina Mobile' in Settings -> Accessibility to allow swipe gestures.")
+            .toString()
+    }
+
+    /**
+     * Types text into the currently focused input field.
+     */
+    fun inputText(text: String): String {
+        AppDebugServer.log("ACTION", "Executing INPUT_TEXT: '$text'")
+        val service = ShiinaAccessibilityService.instance
+        if (service != null) {
+            val ok = service.inputText(text)
+            if (ok) {
+                return JSONObject().put("tool", "INPUT_TEXT").put("success", true).put("text", text).toString()
+            }
+        }
+
+        val escaped = text.replace(" ", "%s").replace("\"", "\\\"")
+        val shellOk = runCatching {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input text \"$escaped\""))
+            p.waitFor() == 0
+        }.getOrDefault(false)
+        if (shellOk) {
+            return JSONObject().put("tool", "INPUT_TEXT").put("success", true).put("method", "shell").put("text", text).toString()
+        }
+
+        return JSONObject()
+            .put("tool", "INPUT_TEXT")
+            .put("success", false)
+            .put("error", "Could not input text. Enable 'Shiina Mobile' in Settings -> Accessibility or ensure an input field is focused.")
+            .toString()
+    }
+
+    /**
+     * Performs a global key/navigation action (back, home).
+     */
+    fun pressKey(action: String): String {
+        AppDebugServer.log("ACTION", "Executing PRESS_KEY: '$action'")
+        val service = ShiinaAccessibilityService.instance
+        if (service != null) {
+            val ok = service.pressGlobal(action)
+            if (ok) {
+                return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", true).toString()
+            }
+        }
+
+        val keycode = when (action.lowercase().trim()) {
+            "back" -> 4
+            "home" -> 3
+            else -> 4
+        }
+        val shellOk = runCatching {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input keyevent $keycode"))
+            p.waitFor() == 0
+        }.getOrDefault(false)
+        if (shellOk) {
+            return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", true).put("method", "shell").toString()
+        }
+
+        return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", false).put("error", "Could not press key. Enable Accessibility Service.").toString()
+    }
+}

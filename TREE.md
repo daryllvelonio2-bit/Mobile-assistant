@@ -19,6 +19,7 @@ Mobile-assistant/
     └── src/
         └── main/
             ├── AndroidManifest.xml # Permissions (UsageStats, SYSTEM_ALERT_WINDOW, Health Connect, Foreground Service)
+            ├── res/xml/            # Accessibility service configuration (gestures & window content retrieval)
             └── java/com/shiina/mobile/
                 ├── CompanionApp.kt # Application container initialization
                 ├── MainActivity.kt # Main entry point (Permissions & Settings UI)
@@ -27,12 +28,13 @@ Mobile-assistant/
                 │   │               #   MemoryEpisode, MemoryFact, ChatTurn, MemorySummary) + migrations v1..v6
                 │   ├── security/   # EncryptedSharedPreferences Keystore key management
                 │   └── settings/   # DataStore settings repository
-                ├── action/         # Executor (+LEARN_FACT/SEARCH_WEB/TAKE_SCREENSHOT verbs, WebSearch) + AlarmReceiver (daily 7PM decide+render)
+                ├── action/         # Executor, DeviceActionController, ShiinaAccessibilityService (tap/swipe/type) + AlarmReceiver
                 ├── character/      # Overlay character (mode, controller, overlay service)
                 ├── decision/       # Decision models, provider interface, registry (episode log + cooldown),
                 │   │               #   Gemini round-robin provider, MemoryContext (ranked recall + digests),
-                │   │               #   ShiinaPrompts (global rules + one active mood block)
+                │   │               #   ShiinaPrompts (global rules + mood prompts), ToolCatalog (on-demand toolsets)
                 ├── debug/          # AppDebugServer, JSON API dashboard + DebugTalkService notification panel
+                │                   #   + AdbTalkReceiver (PC chat over adb wifi via send.py)
                 ├── memory/         # MemoryStore (facts CRUD/contradict/forget), MemoryCompactor
                 ├── observation/    # Foreground observation service + MusicTracker (MediaSession, broadcasts) +
                 │                   #   MusicNotificationListener + MemoryOutcomes (episode signals)

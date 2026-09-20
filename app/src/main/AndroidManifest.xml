@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Storage & media read for local music library playback. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
     <!-- Sleep read via Health Connect. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
 
@@ -58,12 +62,31 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <service
+            android:name=".action.ShiinaAccessibilityService"
+            android:label="Shiina Mobile Accessibility"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
         <receiver
             android:name=".action.AlarmReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.shiina.mobile.ACTION_ALARM_TRIGGER" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".debug.AdbTalkReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.shiina.mobile.debug.SEND_MESSAGE" />
             </intent-filter>
         </receiver>
         <receiver

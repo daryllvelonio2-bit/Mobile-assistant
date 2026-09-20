@@ -116,6 +116,18 @@ fun PermissionSection(
             granted = hasNotificationAccess(context),
             onOpen = { openNotificationListenerSettings(context) },
         )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
+        )
+
+        PermissionItemRow(
+            title = "Accessibility service",
+            description = "Allows Shiina to automatically tap the screen, scroll, and type to complete tasks",
+            granted = hasAccessibilityAccess(context),
+            onOpen = { openAccessibilitySettings(context) },
+        )
     }
 }
 

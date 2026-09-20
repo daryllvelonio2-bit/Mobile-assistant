@@ -13,8 +13,8 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 53
-        versionName = "0.53.0"
+        versionCode = 69
+        versionName = "0.69.0"
     }
 
     buildTypes {
@@ -36,6 +36,18 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+}
+
+tasks.matching { it.name == "assembleDebug" }.configureEach {
+    doLast {
+        val apkFile = file("${project.layout.buildDirectory.get()}/outputs/apk/debug/app-debug.apk")
+        if (apkFile.exists()) {
+            val destDir = file("/home/janelle/Downloads")
+            if (!destDir.exists()) destDir.mkdirs()
+            apkFile.copyTo(file("${destDir}/shiina-debug.apk"), overwrite = true)
+            println("Successfully copied APK to ${destDir}/shiina-debug.apk")
+        }
     }
 }
 
