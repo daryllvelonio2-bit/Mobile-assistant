@@ -45,10 +45,12 @@ class GeminiProvider(
         }
         com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Calling Gemini API (model=$model, prompt=${ShiinaPrompts.PROMPT_VERSION})...")
         try {
-            val parts = JSONArray().put(JSONObject().put("text", prompt(summary, memoryContext, senses)))
+            val promptText = prompt(summary, memoryContext, senses)
+            val parts = JSONArray().put(JSONObject().put("text", promptText))
 
             // Attach latest screenshot if captured within the last 30 minutes
             val latestCap = getLatestRecentScreenshot()
+            val screenshotAttached = latestCap != null
             if (latestCap != null) {
                 val bytes = latestCap.readBytes()
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -62,6 +64,12 @@ class GeminiProvider(
                 )
                 com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Attached screenshot: ${latestCap.name}")
             }
+
+            com.shiina.mobile.debug.AppDebugServer.log(
+                "GEMINI_REQUEST",
+                "Prompt (senses, baseline, memory, rules):\n$promptText" +
+                    if (screenshotAttached) "\n[Attached screenshot: ${latestCap?.name}]" else ""
+            )
 
             val body = JSONObject()
                 .put("contents", JSONArray().put(JSONObject().put("parts", parts)))
@@ -80,6 +88,7 @@ class GeminiProvider(
                     throw IllegalStateException("gemini $code")
                 }
                 val respStr = response.body?.string().orEmpty()
+                com.shiina.mobile.debug.AppDebugServer.log("GEMINI_RESPONSE", "Raw response:\n$respStr")
                 com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "API success response received")
                 parse(respStr, summary)
             }
@@ -108,61 +117,49 @@ class GeminiProvider(
             goalDao?.all()?.filter { it.status == 0 }?.take(3)
                 ?.joinToString("; ") { it.title.take(30) }.orEmpty()
         }.getOrDefault("")
-        return ShiinaPrompts.GLOBAL_RULES + " " +
-            ShiinaPrompts.moodPrompt(mood) + " " +
-            "INTERRUPTION POLICY: interrupting attention is expensive. ONLY interrupt if " +
-            "(1) entertainment time exceeds baseline by a significant margin — use the " +
-            "'Learned interrupt threshold' from MEMORY when present, otherwise >20%, " +
-            "(2) bedtime passed with active screen use, or " +
-            "(3) a goal deadline is imminent/overdue while non-work apps are active. " +
-            "NEVER interrupt if the user is productive, within normal variance, or you " +
-            "lack a concrete actionable observation. " +
-            "SCREENSHOT GROUNDING: if a screenshot is attached, observe only what is " +
-            "actually visible in it and incorporate it candidly. If no screenshot is " +
-            "attached, never describe the screen — say you can't see it. " +
-            "Every interruption must end in a binary choice, an acknowledgment, or a " +
-            "local action. If you do not know why the user slipped, ask — never guess. " +
-            "IDENTITY: only use the user's name if MEMORY gives user_name — never " +
-            "invent, guess, or reuse a name from nowhere. If no name is listed, use none. " +
-            "DEVICE SENSES (live, never look these up): " +
-            "${senses.ifBlank { ShiinaPrompts.timeLine(context) }} " +
-            "entertainment ${summary.entertainmentMinutes}min vs " +
-            "7-day baseline ${summary.entertainmentBaseline.toInt()}min " +
-            "(${if (pctOver >= 0) "+" else ""}${pctOver}% over), " +
-            "goals open=${summary.goalsOpen} done=${summary.goalsDone} " +
-            "missed=${summary.goalsMissed}" +
-            (if (goals.isNotBlank()) " (open goal titles: $goals)" else "") + ". " +
-            (if (memoryContext.isNotBlank()) {
-                "MEMORY (verified past rounds and learned facts — use for continuity, " +
-                    "reference real patterns like streaks when relevant): $memoryContext "
-            } else "") +
-            "OUTPUT RULES: reply with raw JSON only — no markdown fences, no commentary " +
-            "before or after, no trailing text. tone MUST be one of " +
-            "neutral|candid_direct|firm_warning|validating; any other value is treated " +
-            "as neutral. spoken_message must be 140 characters or fewer, cut cleanly at " +
-            "a word boundary. " +
-            "PARAM RULES: LEARN_FACT needs key AND value; SET_REMINDER needs text " +
-            "containing a time (\"remind me at 8pm to ...\"); READ_URL needs a full url; " +
-            "SEARCH_WEB needs a query; LOG_GOAL needs a title. If you cannot fill the " +
-            "parameter, use type NONE instead. " +
-            "{\"should_interrupt\":<boolean>," +
-            "\"confidence\":<0.0-1.0 how sure this interrupt is warranted>," +
-            "\"confidence_reason\":\"<1 sentence: which metric crossed baseline>\"," +
-            "\"tone\":\"<neutral|candid_direct|firm_warning|validating>\"," +
-            "\"spoken_message\":\"<exact words shown on screen, or null>\"," +
-            "\"recommended_action\":{\"type\":\"<NONE|SET_ALARM|TOGGLE_SCREENSHOT|LOG_GOAL|LEARN_FACT|SEARCH_WEB|TAKE_SCREENSHOT|READ_URL|CHECK_GOALS|SET_REMINDER|COMPLETE_GOAL>\"," +
-            "\"parameters\":{\"key\":\"<LEARN_FACT: fact name>\"," +
-            "\"value\":\"<LEARN_FACT: fact value | SEARCH_WEB: query | READ_URL: url (key \"url\") | SET_REMINDER: reminder text (key \"text\") | COMPLETE_GOAL: goal title>\"," +
-            "\"title\":\"<LOG_GOAL: goal title>\"}}," +
-            "\"extra_actions\":[{\"type\":\"<verb>\",\"param\":\"<parameter>\"}]} — " +
-            "extra_actions holds up to 2 follow-up steps after the main action " +
-            "(e.g. screenshot then search), or [] when none. " +
-            "Use SEARCH_WEB when they ask something you cannot know on-device; " +
-            "READ_URL to fetch the actual article a search pointed to; " +
-            "CHECK_GOALS to report open/stalled goals; " +
-            "COMPLETE_GOAL with the goal title when they finish one; " +
-            "SET_REMINDER with text like \"remind me at 8pm to stretch\"; " +
-            "use TAKE_SCREENSHOT when seeing the screen would answer them."
+        return buildString {
+            appendLine("# Persona & Tone")
+            appendLine(ShiinaPrompts.GLOBAL_RULES)
+            appendLine(ShiinaPrompts.moodPrompt(mood))
+            appendLine()
+
+            appendLine("# Interruption & Presence Policy")
+            appendLine("Setting should_interrupt to true actively presents you on screen to get the user's attention.")
+            appendLine("ONLY set should_interrupt to true if:")
+            appendLine("1. entertainment time exceeds baseline significantly (use 'Learned interrupt threshold' from MEMORY if present, else >20%),")
+            appendLine("2. bedtime passed with active screen use, or")
+            appendLine("3. a goal deadline is overdue or imminent while non-work apps are active.")
+            appendLine("NEVER interrupt if the user is productive, within normal habits, or if you lack a concrete observation.")
+            appendLine("When should_interrupt is false, spoken_message must be null.")
+            appendLine("When should_interrupt is true, spoken_message must be a short, natural, friendly observation or question (1-2 sentences, <=140 chars).")
+            appendLine("SCREENSHOT GROUNDING: if a screenshot is attached, observe only what is visible in it. If none is attached, do not guess screen contents.")
+            appendLine("IDENTITY: only use the user's name if MEMORY gives user_name — never guess or invent names.")
+            appendLine()
+
+            appendLine("# Live Context & Device Senses")
+            appendLine("- ${senses.ifBlank { ShiinaPrompts.timeLine(context) }}")
+            appendLine("- Entertainment: ${summary.entertainmentMinutes}min vs 7-day baseline ${summary.entertainmentBaseline.toInt()}min (${if (pctOver >= 0) "+" else ""}${pctOver}% over)")
+            appendLine("- Goals: open=${summary.goalsOpen}, done=${summary.goalsDone}, missed=${summary.goalsMissed}${if (goals.isNotBlank()) " (open titles: $goals)" else ""}")
+            appendLine()
+
+            if (memoryContext.isNotBlank()) {
+                appendLine("# Memory (Verified Past Rounds & Learned Facts)")
+                appendLine(memoryContext.trim())
+                appendLine()
+            }
+
+            appendLine("# Output Specification & JSON Schema")
+            appendLine("Reply with raw JSON only (no markdown fences, no trailing commentary).")
+            appendLine("tone MUST be one of: neutral | candid_direct | firm_warning | validating.")
+            appendLine("spoken_message must be <=140 chars.")
+            appendLine("JSON structure:")
+            appendLine("{\"should_interrupt\":<boolean>,\"confidence\":<0.0-1.0>,\"confidence_reason\":\"<1 short sentence: which metric triggered this>\",\"tone\":\"<neutral|candid_direct|firm_warning|validating>\",\"spoken_message\":\"<exact words spoken to user, or null>\",\"recommended_action\":{\"type\":\"<NONE|SET_ALARM|TOGGLE_SCREENSHOT|LOG_GOAL|LEARN_FACT|SEARCH_WEB|TAKE_SCREENSHOT|READ_URL|CHECK_GOALS|SET_REMINDER|COMPLETE_GOAL|HIDE|SET_MODE>\",\"parameters\":{\"key\":\"<LEARN_FACT: fact name>\",\"value\":\"<LEARN_FACT: fact value | SEARCH_WEB: query | READ_URL: url | SET_REMINDER: text | COMPLETE_GOAL: goal title>\",\"mode\":\"<SET_MODE: WANDER|STAY|VANISH>\",\"title\":\"<LOG_GOAL: goal title>\"}},\"extra_actions\":[{\"type\":\"<verb>\",\"param\":\"<parameter>\"}]}")
+            appendLine("Action Guidelines:")
+            appendLine("- Use SET_MODE with mode WANDER, STAY, or VANISH to manage avatar presence;")
+            appendLine("- Use HIDE to hide overlay;")
+            appendLine("- Use SEARCH_WEB when external info is needed;")
+            appendLine("- Use TAKE_SCREENSHOT when looking at the screen would answer a question.")
+        }
     }
 
     private fun parse(body: String, summary: DecisionSummary): Decision {
@@ -210,19 +207,27 @@ class GeminiProvider(
                     i++
                 }
             }
+            com.shiina.mobile.debug.AppDebugServer.log(
+                "GEMINI_PARSED",
+                "Parsed decision: should_interrupt=$interrupt, confidence=$confidence, reason=$reason, tone=$tone, action=$action, param=$param, message=$rawMessage, extras=$extras"
+            )
             Decision(
                 tone = tone,
                 interrupt = interrupt,
                 intent = Decision.intentFor(tone, action),
-                action = if (interrupt) action else "NONE",
-                actionParam = if (interrupt) param.take(140) else "",
+                action = if (interrupt || action == "HIDE" || action == "SET_MODE") action else "NONE",
+                actionParam = if (interrupt || action == "HIDE" || action == "SET_MODE") param.take(140) else "",
                 message = if (interrupt) {
                     rawMessage.take(140).ifEmpty { defaultMessage(summary, true) }
                 } else "",
                 confidence = confidence,
                 extraActions = if (interrupt) extras else emptyList(),
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            com.shiina.mobile.debug.AppDebugServer.log(
+                "GEMINI_PARSE_ERROR",
+                "Failed to parse Gemini response: ${e.message}\nBody was: $body\nFalling back to rule-based decision."
+            )
             ruleBased(summary)
         }
     }
@@ -241,6 +246,8 @@ class GeminiProvider(
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
         "COMPLETE_GOAL" -> params?.optString("value", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("title", "")?.trim().orEmpty() }
+        "SET_MODE" -> params?.optString("mode", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
         else -> params?.optString("title", "")?.trim().orEmpty()
     }
 

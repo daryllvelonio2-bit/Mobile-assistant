@@ -7,8 +7,13 @@ import kotlin.random.Random
 object CharacterController {
 
     fun modeFor(decision: Decision): CharacterMode {
+        if (decision.action.equals("hide", ignoreCase = true) || decision.action.equals("vanish", ignoreCase = true)) {
+            return CharacterMode.VANISH
+        }
+        if (decision.action.equals("SET_MODE", ignoreCase = true)) {
+            return runCatching { CharacterMode.valueOf(decision.actionParam.uppercase()) }.getOrDefault(CharacterMode.STAY)
+        }
         if (!decision.interrupt) return CharacterMode.STAY
-        if (decision.action == "hide") return CharacterMode.VANISH
         return CharacterMode.WANDER
     }
 

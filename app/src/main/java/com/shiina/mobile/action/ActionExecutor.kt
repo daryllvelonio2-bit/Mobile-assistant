@@ -147,6 +147,27 @@ class ActionExecutor(
                 .getOrDefault("")
             msg.ifEmpty { "reminder time unclear: ${param.take(40)}" }
         }
+        "HIDE" -> {
+            val i = Intent(context, com.shiina.mobile.character.CharacterOverlayService::class.java).apply {
+                this.action = com.shiina.mobile.character.CharacterOverlayService.ACTION_HIDE
+            }
+            context.startService(i)
+            "overlay hidden"
+        }
+        "SET_MODE" -> {
+            val mode = runCatching { com.shiina.mobile.character.CharacterMode.valueOf(param.uppercase()) }
+                .getOrDefault(com.shiina.mobile.character.CharacterMode.STAY)
+            val i = Intent(context, com.shiina.mobile.character.CharacterOverlayService::class.java).apply {
+                this.action = if (mode == com.shiina.mobile.character.CharacterMode.VANISH) {
+                    com.shiina.mobile.character.CharacterOverlayService.ACTION_HIDE
+                } else {
+                    com.shiina.mobile.character.CharacterOverlayService.ACTION_SHOW
+                }
+                putExtra(com.shiina.mobile.character.CharacterOverlayService.EXTRA_MODE, mode.name)
+            }
+            context.startService(i)
+            "overlay mode set: ${mode.name}"
+        }
         else -> {
             AppDebugServer.log("ACTION", "Unknown action rejected: $action")
             "unknown action $action"

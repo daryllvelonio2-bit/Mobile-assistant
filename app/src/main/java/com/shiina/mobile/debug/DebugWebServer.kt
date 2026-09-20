@@ -35,7 +35,18 @@ object AppDebugServer {
         if (events.size > 300) {
             events.removeAt(events.size - 1)
         }
-        Log.d("AppDebugServer", "[$category] $message")
+        val chunkSize = 3500
+        if (message.length <= chunkSize) {
+            Log.d("AppDebugServer", "[$category] $message")
+        } else {
+            val totalParts = (message.length + chunkSize - 1) / chunkSize
+            for (i in 0 until totalParts) {
+                val start = i * chunkSize
+                val end = minOf(start + chunkSize, message.length)
+                val partContent = message.substring(start, end)
+                Log.d("AppDebugServer", "[$category] [part ${i + 1}/$totalParts] $partContent")
+            }
+        }
     }
 
     fun start() {

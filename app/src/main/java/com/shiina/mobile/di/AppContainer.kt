@@ -50,7 +50,11 @@ class AppContainer(context: Context) {
 
     val toolTracker: ToolTracker by lazy { ToolTracker(toolStatDao) }
 
-    val deviceSenses: DeviceSenses by lazy { DeviceSenses(appContext) }
+    val musicTracker: com.shiina.mobile.observation.MusicTracker by lazy {
+        com.shiina.mobile.observation.MusicTracker(appContext)
+    }
+
+    val deviceSenses: DeviceSenses by lazy { DeviceSenses(appContext, musicTracker) }
 
     val pageReader: PageReader by lazy { PageReader() }
 
@@ -72,7 +76,11 @@ class AppContainer(context: Context) {
         MemoryStore(memoryFactDao, memoryEpisodeDao, chatTurnDao, memorySummaryDao)
     }
 
-    val chatHistory: ChatHistory by lazy { ChatHistory(chatTurnDao) }
+    val chatHistory: ChatHistory by lazy { ChatHistory(chatTurnDao, memoryFactDao) }
+
+    val learnedMemoryManager: com.shiina.mobile.memory.LearnedMemoryManager by lazy {
+        com.shiina.mobile.memory.LearnedMemoryManager(appContext, memoryStore)
+    }
 
     val memoryContext: MemoryContext by lazy {
         MemoryContext(memoryEpisodeDao, memoryFactDao, database.baselineDao(), memorySummaryDao)

@@ -39,6 +39,7 @@ data class Decision(
             "NONE", "SET_ALARM", "TOGGLE_SCREENSHOT", "LOG_GOAL",
             "LEARN_FACT", "SEARCH_WEB", "TAKE_SCREENSHOT",
             "READ_URL", "CHECK_GOALS", "SET_REMINDER", "COMPLETE_GOAL",
+            "HIDE", "SET_MODE",
         )
 
         fun intentFor(tone: String, action: String): String =

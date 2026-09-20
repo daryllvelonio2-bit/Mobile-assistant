@@ -26,6 +26,7 @@ class CompanionApp : Application() {
         AppDebugServer.log("SYSTEM", "CompanionApp onCreate started")
         container = AppContainer(this)
         AppDebugServer.log("SYSTEM", "AppContainer initialized successfully")
+        runCatching { container.musicTracker.start() }
         runCatching { DebugTalkService.start(this) }
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching { container.actionExecutor.execute("alarm") }

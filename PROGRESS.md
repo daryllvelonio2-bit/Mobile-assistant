@@ -6,6 +6,92 @@
 - **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
+- **2026-09-20 — Cheesy Companion Filler & Tack-On Sentence Ban (v0.50.0):**
+  Addressed issue where Shiina was tacking on unprompted companion clichés (e.g. *"Hey Daryll. Just hanging out with you."*) to simple greetings. Updated `GLOBAL_RULES`, `TALK_DRIVE`, and `TOOL_SPEC` (Rule 9) in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.1) to default strictly to a single concise sentence, explicitly forbidding unnecessary second sentences and unprompted activity commentary (such as *"just hanging out with you"*, *"just chilling"*, *"here for you"*). When the user sends a simple greeting (e.g. *"Hi"*, *"Hey"*), Shiina is instructed to respond with just a simple greeting back (e.g. *"Hey Daryll!"*, *"Hi!"*) matching the user's exact brevity. Updated `identityRule` in [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt) to ban tacking on companion filler to greetings.
+- **2026-09-20 — Dynamic Autonomous Mood System & Visual State Reflection (v0.49.0):**
+  Upgraded Shiina's mood architecture from a static, frozen `calm` state into a dynamic autonomous system.
+  Added `"mood": "<calm | candid | warm | firm>"` to the agent output schema in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v4.0),
+  allowing Gemini to shift mood based on the conversation (e.g., `candid` for witty banter, `warm` for comfort/validation,
+  `firm` for accountability/procrastination, and `calm` for unhurried downtime). Sharpened `MOOD_PROMPTS` with distinct,
+  vibrant behavioral instructions. In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt),
+  parsed `step.mood` dynamically updates `lastTone`, restores tone on startup from `MemoryEpisodeDao`, and persists
+  conversation moods into episodic memory for background decisions. In [CharacterOverlayService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/CharacterOverlayService.kt),
+  mapped `toneColor` to vibrant theme accents (amber for `candid`, coral for `firm`, mint for `warm`, sky blue for `calm`)
+  and added a live mood-colored border and badge to the floating bubble overlay.
+- **2026-09-20 — MALFORMED_RESPONSE Error Handling & Small Talk Repetition Ban (v0.48.0):**
+  Fixed critical issue where Gemini API responses with `finishReason: "MALFORMED_RESPONSE"` (empty candidate parts) leaked raw JSON error payloads as Shiina's speech on the overlay and debug panel. In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), `postText` now performs automatic retries on malformed or empty responses and falls back gracefully to a natural conversational phrase instead of raw JSON. Sanitized `parseAgentStep` and `askGemini` to strictly filter out candidate/finishReason/error JSON strings from ever becoming user messages. Updated `GLOBAL_RULES`, `TALK_DRIVE`, and `TOOL_SPEC` in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v3.9) to explicitly ban repetitive small talk (such as repeatedly asking "how is your Sunday afternoon going?") and forbid repeating questions or topics already asked in recent conversation history.
+- **2026-09-20 — Single-Step Action Execution & Repetition Prevention (v0.47.0):**
+  Fixed bug where saving a fact or executing an action triggered an intermediate status message followed by a repetitive final message. In [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), tools requested on the final step (`status: "DONE"`) now execute immediately before completing, allowing single-step actions without an unnecessary second turn. Intermediate overlay status updates are now restricted to long-running tools (`SEARCH_WEB`, `READ_URL`, `TAKE_SCREENSHOT`), preventing duplicate/repetitive messages for fast local tools (`LEARN`, `SET_MODE`). Connected `userName` resolution in [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt) to [LearnedMemoryManager.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/LearnedMemoryManager.kt) (`get(key)`), resolving prompt contradictions where the AI greeted known users as strangers. Added name extraction fallback in `runTool` and updated `TOOL_SPEC` in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v3.8) to enforce non-repetitive responses.
+- **2026-09-20 — Situation-Grounded Suggestions & Natural Conversational Flow (v0.46.0):**
+  Refined Shiina's conversational behavior in [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt) (v3.7)
+  to stop appending unprompted, artificial multiple-choice questions or unsolicited conversational filler
+  (e.g., asking "Need a cozy nap or just hanging out?" after a casual "Hmpp"). Updated `GLOBAL_RULES`,
+  `TALK_DRIVE`, and `TOOL_SPEC` to instruct the model to match the user's energy, avoid forcing conversations
+  with trailing questions on brief banter, and ensure suggestions and follow-ups are strictly grounded
+  in the current situation (real-time device senses like battery/time/music, active goals, or explicit context).
+- **2026-09-20 — Persistent Learned Memory File & LEARN Tool (v0.45.0):**
+  Added persistent file-backed learning (`LearnedMemoryManager`) writing to `learned_memory.md` on
+  disk and syncing with `MemoryStore`. Equipped Shiina with the `LEARN` tool, enabling the autonomous
+  agent to detect and record lasting facts, user habits, rules, and preferences into the persistent
+  knowledge base. The contents of `learned_memory.md` are dynamically read and injected into the prompt
+  under a dedicated `# Learned Memory (Persistent Knowledge File)` section, ensuring the AI carries its
+  authored memory across sessions. Identity corrections (`I am <name>`, `call me <name>`) also sync
+  directly into the persistent memory file.
+- **2026-09-20 — Autonomous Agent Loop & Interactive CONTINUE/DONE Control (v0.44.0):**
+  Upgraded the Talk engine from a standard turn-based chatbot into an autonomous Think-Act-Observe
+  agent loop (inspired by ReAct, smolagents, and Hermes Agent architectures). Shiina now loops by
+  default to execute multi-step tasks, investigate observations, and interact. Each step outputs
+  structured JSON with `thought`, `status` (`CONTINUE` | `DONE`), `tool`, and `message`. Only the
+  AI invokes loop completion by declaring `status: "DONE"`. When continuing (`status: "CONTINUE"`),
+  intermediate progress messages are pushed live to the floating overlay so the user sees real-time
+  interaction. An 8-step safety ceiling and repetition detection prevent runaway loops.
+- **2026-09-20 — Uncapped Conversation Memory & 100k Context Auto-Compaction (v0.43.0):**
+  Removed all artificial turn limits and message truncations from `ChatTurnDao` and `ChatHistory`.
+  Chat turns are now stored permanently in SQLite without `keepLatest(30)` deletions or `.take(512)`
+  character caps. Below the 100k context threshold (`MAX_CONTEXT_CHARS = 100_000`), 100% of
+  conversation turns are passed verbatim in chronological order to Gemini, granting Shiina full,
+  unbroken memory across large conversational sessions. Once conversation context reaches 100k
+  context, `buildConversationContext()` automatically compacts the older conversation turns into
+  a durable digest (`# Earlier Conversation (Compacted)`) persisted in `MemoryFact`, while keeping
+  recent turns in full verbatim fidelity without deleting any raw rows from the database.
+- **2026-09-20 — Expanded Conversation Window & Identity Learning (v0.42.0):** Fixed issue
+  where conversation history in Talk mode was prematurely cut off after only 3 exchanges.
+  Increased `recentTurns` limit from 6 to 20 across `ChatHistory` and `DebugTalkService`,
+  maintaining up to 10 full conversational back-and-forth turns in context. Expanded
+  identity fast-path in `DebugTalkService` to recognize `"I am <name>"`, `"I'm <name>"`,
+  `"im <name>"`, and `"call me <name>"` (filtering state words like "bored", "fine"),
+  persisting the user's name directly to `memoryStore` (`user_name`) so it is never lost.
+- **2026-09-20 — Clean Prompt Hierarchy & Section Separation (v0.41.0):** Restructured prompt
+  generation in `DebugTalkService`, `ShiinaPrompts` (v3.4), and `GeminiProvider`. Fixed
+  critical structural issue where `TOOL_SPEC` ("You have tools...") was concatenated directly
+  onto the end of the user's input (`"They say: $userText You have tools..."`) and chat
+  history was mashed together with the current query. Prompts now feature clean, distinct
+  markdown sections: `# Persona & Instructions`, `# Available Tools & Protocol`, `# Live Context & Device Senses`,
+  `# Memory`, `# Recent Conversation History`, and an isolated `# Current User Message`.
+- **2026-09-20 — Friendly global companion persona (v0.40.0):** Overhauled `GLOBAL_RULES`
+  and moods in `ShiinaPrompts` (v3.3). Replaced terse "silence/brevity over filler"
+  and robotic appliance framing ("Owner says") with a warm, caring, and lighthearted
+  friend persona ("They say", natural conversational flow) while preserving conciseness
+  and zero hallucination.
+- **2026-09-20 — Exact music query & tracking (v0.39.0):** NEW `observation/MusicTracker.kt`
+  + `MusicNotificationListener.kt`. Reads exact song title, artist, and album from
+  Android `MediaSession`, `NotificationListenerService`, and music broadcast intents
+  (Spotify, Huawei Music, Apple Music, YouTube Music, etc.). Injected into `DeviceSenses`
+  (`"current_music"` field) and wired to a Talk fast-path ("what song is playing",
+  "anong kanta to") so Shiina immediately and accurately answers with the real playing
+  track without guessing.
+- **2026-09-20 — Prompt overhaul & SET_MODE tool (v0.38.0):** Overhauled all system
+  and conversation prompts across `ShiinaPrompts` (v3.2), `GeminiProvider`, and
+  `DebugTalkService`. Removed robotic meta-commentary triggers (such as "no tool was
+  needed", rigid binary choice mandates, and draft self-critique loops) that caused
+  weird conversational outputs. Added explicit `SET_MODE` tool (`WANDER`, `STAY`,
+  `VANISH`) and `HIDE` action support across `ToolCall`, the Talk tool harness,
+  `CharacterController`, and `ActionExecutor`.
+- **2026-09-20 — Overlay persistence fix (v0.37.0):** Removed the 60s auto-dismiss
+  timer (`autoDismissJob`) from `CharacterOverlayService`. The overlay now
+  stays visible continuously and only hides when the character mode explicitly
+  becomes `VANISH` (or `ACTION_HIDE` is called), preventing unintentional
+  disappearances and false dismissal cooldown suppressions.
 - **2026-09-20 — Total context viewer (v0.33.0):** Settings → Memory now has
   a "Total context" section showing the exact block she carries into every
   reply (MemoryContext.build output with char count) plus a refresh button.
@@ -193,4 +279,28 @@
     - Root cause: `CharacterOverlayService.ensureBubble()` created a bare `ComposeView` and added it via `WindowManager.addView` with no `ViewTreeLifecycleOwner`/`ViewModelStoreOwner`/`SavedStateRegistryOwner`, so composition threw `IllegalStateException: ViewTreeLifecycleOwner not found from ComposeView`.
     - Fix: new retained `OverlayLifecycleOwner` (LifecycleRegistry + ViewModelStore + SavedStateRegistryController implementing LifecycleOwner/ViewModelStoreOwner/SavedStateRegistryOwner); all three `ViewTree*.set(view, owner)` calls happen BEFORE `addView`, lifecycle moves to RESUMED on add success and DESTROYED (store cleared) on `removeBubble`/`onDestroy`/add failure. Existing `runCatching` hardening kept.
     - Deps: added explicit `lifecycle-runtime`, `lifecycle-viewmodel` (2.8.5) + `savedstate` (1.2.1, corrected from nonexistent 2.8.0) to version catalog + `app/build.gradle.kts`. Each `ViewTree*` import verified present in its declared AAR (classes.jar inspection).
-    - Version bump per agent.md rule 15: `versionCode` 2→3, `versionName` 0.2.0→0.3.0. Service file 281 lines (<500), M3 tokens only. Build/reinstall/logcat verification delegated to parent.
+  - **2026-09-20 — UI Modernization & Material 3 Refactor (v0.36.0):**
+    - Delegated UI/UX redesign to specialized `ui_ux_expert` subagent following `agent.md` Rule 13.
+    - Modernized layout from single raw vertical column to Material 3 `Scaffold` with edge-to-edge support, sleek `TopAppBar`, and a 3-tab `NavigationBar` (Companion, Memory, Settings).
+    - Eliminated bloatware, excessive cards, and nested containers in favor of clean typography-led hierarchy, generous whitespace, flush rows, and subtle low-opacity `HorizontalDivider` elements.
+    - Modernized `Color.kt` and `Theme.kt` with a sophisticated indigo-slate light theme and obsidian/iris dark theme with complete Material 3 semantic color mapping.
+    - Integrated permissions status & grant triggers seamlessly into Settings with a non-intrusive header badge indicator when permissions are missing.
+    - Version bumped to `0.36.0` (`versionCode` 36) per `agent.md` Rule 15.
+    - Verified with `./gradlew assembleDebug` — BUILD SUCCESSFUL in 19s.
+  - **2026-09-20 — Full Gemini API Observability & Monitor Log Stream (v0.37.0):**
+    - Delegated debugging and monitoring enhancements to specialized `debugger` subagent following `agent.md` Rule 13.
+    - Added safe logcat chunking in `AppDebugServer.log` (splits >3500 char messages into `[part X/Y]` to prevent `logd`'s 4KB truncation).
+    - Implemented comprehensive Gemini logging in `GeminiProvider.kt`:
+      - `GEMINI_REQUEST`: full prompt (rules, senses, baselines, goals, memory) and vision screenshot attachment status.
+      - `GEMINI_RESPONSE`: complete raw response string from Gemini.
+      - `GEMINI_PARSED`: extracted decision fields (interrupt, confidence, reason, tone, action, param, message, extras).
+      - `GEMINI_PARSE_ERROR`: logs parse errors and raw response before falling back to rule-based decision.
+    - Enhanced talk logging in `DebugTalkService.kt`:
+      - `GEMINI_TALK_REQUEST`: full talk prompt and screenshot attachment status.
+      - `GEMINI_TALK_RESPONSE`: raw response text from Gemini.
+      - `GEMINI_TALK_PARSED`: parsed tool calls (tool, query, url, key, value, text, answer).
+    - Enhanced `monitor.py`:
+      - Chunk reassembly for multi-part logcat messages.
+      - ANSI color-coded visual boxes for requests (cyan), responses (yellow with pretty-printed JSON and token counts), parsed outputs (green), and errors (red).
+    - Version bumped to `0.37.0` (`versionCode` 37) per `agent.md` Rule 15.
+    - Verified with `assembleDebug` — BUILD SUCCESSFUL in 7s.

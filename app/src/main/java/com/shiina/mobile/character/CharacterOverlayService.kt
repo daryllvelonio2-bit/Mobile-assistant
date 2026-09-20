@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,7 +62,6 @@ class CharacterOverlayService : Service() {
     private var mode: CharacterMode = CharacterMode.STAY
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wanderJob: Job? = null
-    private var autoDismissJob: Job? = null
     private var overlayOwner: OverlayLifecycleOwner? = null
     private val showTimestamps = ArrayDeque<Long>()
 
@@ -237,11 +237,12 @@ class CharacterOverlayService : Service() {
                     Box(
                         modifier = Modifier
                             .size(64.dp)
-                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+                            .border(2.5.dp, toneColor(tone), CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
-                            text = tone.take(4),
+                            text = tone.take(4).uppercase(),
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
@@ -267,23 +268,20 @@ class CharacterOverlayService : Service() {
                     }
                 }
             }
-            // Audit U4: auto-dismiss after 60s so the bubble never outlives
-            // its dismiss-window semantics. Fresh shows reset the timer.
-            autoDismissJob?.cancel()
-            autoDismissJob = scope.launch {
-                delay(AUTO_DISMISS_MS)
-                removeBubble()
-                runCatching {
-                    (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
-                }
-            }
         }
     }
 
     private fun applyMode(next: CharacterMode) {
         mode = next
         when (next) {
-            CharacterMode.VANISH -> removeBubble()
+            CharacterMode.VANISH -> {
+                removeBubble()
+                scope.launch(Dispatchers.IO) {
+                    runCatching {
+                        (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
+                    }
+                }
+            }
             CharacterMode.STAY -> {
                 wanderJob?.cancel()
                 ensureBubble()
@@ -313,10 +311,11 @@ class CharacterOverlayService : Service() {
     }
 
     private fun toneColor(t: String): Color = when (t.lowercase()) {
-        "candid_direct" -> Color(0xFFFFC14D)
-        "firm_warning" -> Color(0xFFFF8A80)
-        "validating" -> Color(0xFFA7F3C7)
-        else -> Color.White
+        "candid", "candid_direct" -> Color(0xFFFFC14D) // Warm amber / playful
+        "firm", "firm_warning" -> Color(0xFFFF8A80)   // Coral red / alert
+        "warm", "validating" -> Color(0xFFA7F3C7)     // Mint green / supportive
+        "calm", "neutral" -> Color(0xFF93C5FD)        // Sky blue / relaxed
+        else -> Color(0xFF93C5FD)
     }
 
     private fun displaySize(): Pair<Int, Int> {
@@ -335,7 +334,6 @@ class CharacterOverlayService : Service() {
 
     private fun removeBubble() {
         wanderJob?.cancel()
-        autoDismissJob?.cancel()
         runCatching {
             val wm = windowManager
             val view = bubble
@@ -366,7 +364,6 @@ class CharacterOverlayService : Service() {
         const val EXTRA_ACTION = "action"
         private const val CHANNEL = "character"
         private const val NOTIFICATION_ID = 2
-        private const val AUTO_DISMISS_MS = 60_000L
         private const val MAX_SHOWS_PER_HOUR = 6
     }
 }

@@ -24,7 +24,10 @@ import org.json.JSONObject
  * Audit S7: foreground app degrades to an honest "unknown" instead of
  * silently disappearing when usage access is missing.
  */
-class DeviceSenses(private val context: Context) {
+class DeviceSenses(
+    private val context: Context,
+    private val musicTracker: MusicTracker? = null,
+) {
 
     @Volatile private var cached: String = ""
     @Volatile private var cachedAt: Long = 0L
@@ -36,6 +39,8 @@ class DeviceSenses(private val context: Context) {
             val fmt = SimpleDateFormat("EEE MMM d, h:mm a", Locale.getDefault())
             val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
             val batt = battery()
+            val track = musicTracker?.getExactMusic()
+            val isPlaying = track?.isPlaying ?: musicPlaying()
             val json = JSONObject()
                 .put("time", fmt.format(Date()))
                 .put("hour_bucket", bucket(hour))
@@ -44,14 +49,24 @@ class DeviceSenses(private val context: Context) {
                 .put("charging", charging())
                 .put("screen", if (screenOn()) "on" else "off")
                 .put("ringer", ringer())
-                .put("music_playing", musicPlaying())
+                .put("music_playing", isPlaying)
                 .put("foreground_app", foregroundApp() ?: "unknown (no usage access)")
+            if (track != null && isPlaying) {
+                val desc = if (track.artist.isNotBlank()) "${track.title} by ${track.artist}" else track.title
+                json.put("current_music", desc.trim())
+                if (track.album.isNotBlank()) json.put("music_album", track.album)
+                if (track.app.isNotBlank()) json.put("music_app", track.app)
+            } else {
+                json.put("current_music", null)
+            }
             topApps()?.let { json.put("top_apps_today", it) }
             cached = json.toString()
             cachedAt = now
             cached
         }.getOrDefault("{}")
     }
+
+    fun isMusicPlaying(): Boolean = musicPlaying()
 
     private fun battery(): Int = runCatching {
         context.getSystemService(BatteryManager::class.java)

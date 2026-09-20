@@ -1,10 +1,27 @@
 package com.shiina.mobile.ui.settings
 
+import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -17,69 +34,202 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.shiina.mobile.data.db.MemoryFact
+import com.shiina.mobile.debug.DebugTalkService
 
-/** Phase 6 memory viewer: status, facts list (edit/delete), weekly digests, forget everything. */
+/**
+ * Modern, clean Memory panel.
+ * Minimalist design: typography-driven, zero excess card containers, subtle dividers.
+ */
 @Composable
-fun MemoryPanel(viewModel: SettingsViewModel) {
+fun MemoryPanel(
+    viewModel: SettingsViewModel,
+    modifier: Modifier = Modifier,
+) {
     val facts by viewModel.facts.collectAsState()
     val status by viewModel.memoryStatus.collectAsState()
     val digests by viewModel.digests.collectAsState()
     val fullContext by viewModel.fullContext.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var armed by remember { mutableStateOf(false) }
-    // No scroll here: MainActivity's root column already scrolls — a nested
-    // scrollable gets infinite constraints and crashes the app on launch.
+
     Column(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 20.dp),
     ) {
-        Text("Memory", style = MaterialTheme.typography.titleLarge)
+        // Header
+        Text(
+            text = "Memory",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Spacer(modifier = Modifier.height(6.dp))
+
         Text(
             text = status,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Facts Section
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            facts.forEach { fact ->
-                FactRow(fact, viewModel)
-            }
-        }
-        if (digests.isNotEmpty()) {
             Text(
-                text = "Weekly digests",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 12.dp),
+                text = "Learned Facts",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
             )
-            digests.forEach { d ->
-                Text(
-                    text = d.digest,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
+            Text(
+                text = "${facts.size} saved",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (facts.isEmpty()) {
+            Text(
+                text = "No facts stored yet. Shiina learns your preferences as you interact.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+        } else {
+            facts.forEach { fact ->
+                FactItemRow(
+                    fact = fact,
+                    onSave = { updatedValue -> viewModel.updateFact(fact.key, updatedValue) },
+                    onDelete = { viewModel.deleteFact(fact.key) },
+                )
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                    thickness = 1.dp,
                 )
             }
         }
-        OutlinedButton(
-            onClick = { viewModel.refreshContext() },
-            modifier = Modifier.padding(top = 12.dp),
-        ) {
-            Text("Refresh total context")
+
+        // Weekly Digests Section
+        if (digests.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(20.dp))
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                thickness = 1.dp,
+            )
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "Weekly Digests",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            digests.forEach { digest ->
+                Text(
+                    text = digest.digest,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp),
+                )
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f),
+                    thickness = 1.dp,
+                )
+            }
         }
-        Text(
-            text = "Total context — exactly what she carries into every reply (${fullContext.length} chars):",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 16.dp),
+
+        Spacer(modifier = Modifier.height(20.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
         )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Active Prompt Context Section
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Active Prompt Context",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            IconButton(onClick = { viewModel.refreshContext() }) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Refresh context",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        Text(
+            text = "Exact memory block carried into reasoning (${fullContext.length} chars)",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
         Text(
             text = fullContext,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
         )
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Reset / Forget Everything
+        Text(
+            text = "Data Management",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "Permanently clear all facts, episodes, and conversation context.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         OutlinedButton(
             onClick = {
                 if (!armed) {
@@ -89,57 +239,99 @@ fun MemoryPanel(viewModel: SettingsViewModel) {
                     viewModel.forgetAll()
                     runCatching {
                         context.startService(
-                            android.content.Intent(
-                                context,
-                                com.shiina.mobile.debug.DebugTalkService::class.java,
-                            ).setAction(
-                                com.shiina.mobile.debug.DebugTalkService.ACTION_RESET_SESSION,
-                            ),
+                            Intent(context, DebugTalkService::class.java).apply {
+                                action = DebugTalkService.ACTION_RESET_SESSION
+                            },
                         )
                     }
                 }
             },
-            modifier = Modifier.padding(top = 12.dp),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error,
+            ),
         ) {
-            Text(
-                if (armed) "Tap again to confirm wipe" else "Forget everything",
-                color = MaterialTheme.colorScheme.error,
-            )
+            Text(if (armed) "Tap again to confirm wipe" else "Forget everything")
         }
+
+        Spacer(modifier = Modifier.height(20.dp))
     }
 }
 
+/**
+ * Flush, minimalist fact row.
+ */
 @Composable
-private fun FactRow(fact: MemoryFact, viewModel: SettingsViewModel) {
+private fun FactItemRow(
+    fact: MemoryFact,
+    onSave: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
     var draft by remember(fact.key, fact.value) { mutableStateOf(fact.value) }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    val isModified = draft != fact.value
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 12.dp),
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(fact.key, style = MaterialTheme.typography.labelLarge)
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { draft = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyMedium,
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = "%.1f confidence · ${fact.source}".format(fact.confidence),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = fact.key,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-        }
-        Column(modifier = Modifier.padding(start = 8.dp)) {
-            if (draft != fact.value) {
-                OutlinedButton(onClick = { viewModel.updateFact(fact.key, draft) }) {
-                    Text("Save")
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isModified) {
+                    FilledTonalButton(
+                        onClick = { onSave(draft) },
+                        contentPadding = ButtonDefaults.ContentPadding,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Save",
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Save", style = MaterialTheme.typography.labelSmall)
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete fact",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
-            OutlinedButton(onClick = { viewModel.deleteFact(fact.key) }) {
-                Text("Delete")
-            }
         }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium,
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = "%.1f confidence · %s".format(fact.confidence, fact.source),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }

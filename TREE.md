@@ -34,8 +34,8 @@ Mobile-assistant/
                 │   │               #   ShiinaPrompts (global rules + one active mood block)
                 ├── debug/          # AppDebugServer, JSON API dashboard + DebugTalkService notification panel
                 ├── memory/         # MemoryStore (facts CRUD/contradict/forget), MemoryCompactor
-                │                   #   (extract-then-delete weekly digests), NightlyReflection (adaptation pass)
-                ├── observation/    # Foreground observation service stub + MemoryOutcomes (episode signals)
+                ├── observation/    # Foreground observation service + MusicTracker (MediaSession, broadcasts) +
+                │                   #   MusicNotificationListener + MemoryOutcomes (episode signals)
                 ├── theme/          # Material 3 Theme, Colors, and Typography
                 ├── ui/
                 │   ├── character/  # Character ViewModel ("remembers N days") and M3 control panel
