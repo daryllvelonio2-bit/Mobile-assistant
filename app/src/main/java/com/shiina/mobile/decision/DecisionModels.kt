@@ -37,10 +37,19 @@ data class Decision(
         val ALLOWED_TONES = setOf("neutral", "candid_direct", "firm_warning", "validating")
         val ALLOWED_ACTIONS = setOf(
             "NONE", "SET_ALARM", "TOGGLE_SCREENSHOT", "LOG_GOAL",
-            "LEARN_FACT", "SEARCH_WEB", "TAKE_SCREENSHOT",
-            "READ_URL", "CHECK_GOALS", "SET_REMINDER", "COMPLETE_GOAL",
+            "LEARN_FACT", "REMEMBER", "SEARCH_WEB", "TAKE_SCREENSHOT",
+            "READ_URL", "CHECK_GOALS", "SET_REMINDER", "LIST_REMINDERS", "CANCEL_REMINDER", "COMPLETE_GOAL",
             "HIDE", "SET_MODE", "MEDIA_CONTROL", "PLAY_MUSIC", "SEARCH_MUSIC", "VOLUME_CONTROL", "DEVICE_ACTION", "OPEN_APP",
             "SEARCH_APP", "LIST_APPS", "GET_DEVICE_STATE",
+        )
+
+        /**
+         * LOOP-2: chores she may run WITHOUT interrupting. When interrupt is
+         * false, only these verbs survive parse; everything else becomes NONE.
+         */
+        val SILENT_ACTIONS = setOf(
+            "LOG_GOAL", "LEARN_FACT", "REMEMBER", "SET_REMINDER", "LIST_REMINDERS",
+            "CHECK_GOALS", "TAKE_SCREENSHOT",
         )
 
         fun intentFor(tone: String, action: String): String =

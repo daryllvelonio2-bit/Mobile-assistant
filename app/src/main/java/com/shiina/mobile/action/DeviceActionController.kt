@@ -28,7 +28,10 @@ import org.json.JSONObject
  * Executes on-device actions such as media playback control, volume/audio adjustments,
  * and app launching. Bridges autonomous LLM agent decisions with real Android hardware & system services.
  */
-class DeviceActionController(private val context: Context) {
+class DeviceActionController(
+    private val context: Context,
+    private val screenMetrics: com.shiina.mobile.observation.ScreenMetrics? = null,
+) {
     private val scope = CoroutineScope(Dispatchers.Main)
 
     /**
@@ -637,10 +640,11 @@ class DeviceActionController(private val context: Context) {
         sb.append("Interactive Elements (${elements.size}):\n")
         elements.take(35).forEach { elem ->
             val label = when {
+                elem.isEditable && elem.text.isNotBlank() -> "[Input Field: \"${elem.text}\"]"
+                elem.isEditable -> "[Editable Input Field]"
                 elem.text.isNotBlank() && elem.desc.isNotBlank() && elem.text != elem.desc -> "\"${elem.text}\" (${elem.desc})"
                 elem.text.isNotBlank() -> "\"${elem.text}\""
                 elem.desc.isNotBlank() -> "[desc: \"${elem.desc}\"]"
-                elem.isEditable -> "[Editable Input]"
                 else -> "[${elem.type}]"
             }
             val flags = mutableListOf<String>()
@@ -662,8 +666,9 @@ class DeviceActionController(private val context: Context) {
     suspend fun tapScreen(x: Float, y: Float, text: String = "", elementId: Int = -1): String {
         AppDebugServer.log("ACTION", "Executing TAP_SCREEN: elementId=$elementId, text='$text', x=$x, y=$y")
         val service = ShiinaAccessibilityService.instance
+        val metrics = screenMetrics ?: com.shiina.mobile.observation.ScreenMetrics(context)
 
-        // 1. Target by elementId if provided (most precise)
+        // 1. Target by elementId if explicitly provided
         if (service != null && elementId > 0) {
             val clicked = service.clickElementById(elementId)
             if (clicked) {
@@ -672,57 +677,31 @@ class DeviceActionController(private val context: Context) {
                     .put("success", true)
                     .put("method", "accessibility_element_id")
                     .put("element_id", elementId)
+                    .put("screen_resolution", metrics.toString())
                     .toString()
             }
         }
 
-        // 2. Target by text if provided
-        if (service != null && text.isNotBlank()) {
-            val clickedByText = service.clickText(text)
-            if (clickedByText) {
-                return JSONObject()
-                    .put("tool", "TAP_SCREEN")
-                    .put("success", true)
-                    .put("method", "accessibility_text")
-                    .put("text", text)
-                    .toString()
+        // 2. Target by coordinates (x, y) if provided — visual ground truth
+        if (x >= 0f && y >= 0f) {
+            val (targetX, targetY) = metrics.toPixels(x, y)
+            if (service != null) {
+                val tapped = service.tap(targetX, targetY)
+                if (tapped) {
+                    return JSONObject()
+                        .put("tool", "TAP_SCREEN")
+                        .put("success", true)
+                        .put("method", "accessibility_gesture")
+                        .put("target_x", targetX)
+                        .put("target_y", targetY)
+                        .put("raw_x", x)
+                        .put("raw_y", y)
+                        .put("screen_resolution", metrics.toString())
+                        .toString()
+                }
             }
-        }
 
-        val dm = context.resources.displayMetrics
-        val screenWidth = dm.widthPixels.toFloat()
-        val screenHeight = dm.heightPixels.toFloat()
-
-        // Normalize coordinates: if coordinates are in 0..1000 scale (standard LLM vision output),
-        // map them to actual device resolution (e.g. 1080x2310)
-        val targetX = if (x in 0f..1000f && y in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) {
-            (x / 1000f) * screenWidth
-        } else {
-            x
-        }
-        val targetY = if (x in 0f..1000f && y in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) {
-            (y / 1000f) * screenHeight
-        } else {
-            y
-        }
-
-        if (service != null && targetX >= 0 && targetY >= 0) {
-            val tapped = service.tap(targetX, targetY)
-            if (tapped) {
-                return JSONObject()
-                    .put("tool", "TAP_SCREEN")
-                    .put("success", true)
-                    .put("method", "accessibility_gesture")
-                    .put("target_x", targetX)
-                    .put("target_y", targetY)
-                    .put("raw_x", x)
-                    .put("raw_y", y)
-                    .toString()
-            }
-        }
-
-        // Fallback: attempt shell command if running with shell/ADB privileges
-        if (targetX >= 0 && targetY >= 0) {
+            // Fallback: attempt shell command if running with shell/ADB privileges
             val shellOk = runCatching {
                 val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input tap ${targetX.toInt()} ${targetY.toInt()}"))
                 p.waitFor() == 0
@@ -734,14 +713,36 @@ class DeviceActionController(private val context: Context) {
                     .put("method", "shell")
                     .put("target_x", targetX)
                     .put("target_y", targetY)
+                    .put("screen_resolution", metrics.toString())
                     .toString()
             }
+        }
+
+        // 3. Target by text if coordinates were not provided or gesture failed
+        if (service != null && text.isNotBlank()) {
+            val clickedByText = service.clickText(text)
+            if (clickedByText) {
+                return JSONObject()
+                    .put("tool", "TAP_SCREEN")
+                    .put("success", true)
+                    .put("method", "accessibility_text")
+                    .put("text", text)
+                    .put("screen_resolution", metrics.toString())
+                    .toString()
+            }
+        }
+
+        val errorMsg = if (service == null) {
+            "Could not tap screen: Accessibility Service is not enabled. Please enable 'Shiina Mobile' in Settings -> Accessibility."
+        } else {
+            "Tap gesture did not register (window may be animating, loading, or transitioning). Do not restart the app; inspect the screen with TAKE_SCREENSHOT before retrying."
         }
 
         return JSONObject()
             .put("tool", "TAP_SCREEN")
             .put("success", false)
-            .put("error", "Could not tap screen. Ensure Accessibility Service is enabled in Settings.")
+            .put("error", errorMsg)
+            .put("screen_resolution", metrics.toString())
             .toString()
     }
 
@@ -750,14 +751,12 @@ class DeviceActionController(private val context: Context) {
      */
     suspend fun swipeScreen(startX: Float, startY: Float, endX: Float, endY: Float, direction: String = ""): String {
         AppDebugServer.log("ACTION", "Executing SWIPE_SCREEN: ($startX, $startY) -> ($endX, $endY), direction='$direction'")
-        val dm = context.resources.displayMetrics
-        val screenWidth = dm.widthPixels.toFloat()
-        val screenHeight = dm.heightPixels.toFloat()
+        val metrics = screenMetrics ?: com.shiina.mobile.observation.ScreenMetrics(context)
+        val screenWidth = metrics.width.toFloat()
+        val screenHeight = metrics.height.toFloat()
 
-        var sX = if (startX in 0f..1000f && startY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (startX / 1000f) * screenWidth else startX
-        var sY = if (startX in 0f..1000f && startY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (startY / 1000f) * screenHeight else startY
-        var eX = if (endX in 0f..1000f && endY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (endX / 1000f) * screenWidth else endX
-        var eY = if (endX in 0f..1000f && endY in 0f..1000f && (screenWidth > 1000f || screenHeight > 1000f)) (endY / 1000f) * screenHeight else endY
+        var (sX, sY) = if (startX >= 0f && startY >= 0f) metrics.toPixels(startX, startY) else -1f to -1f
+        var (eX, eY) = if (endX >= 0f && endY >= 0f) metrics.toPixels(endX, endY) else -1f to -1f
 
         if (sX < 0 || sY < 0 || eX < 0 || eY < 0) {
             val cx = screenWidth / 2f
@@ -783,6 +782,7 @@ class DeviceActionController(private val context: Context) {
                     .put("startY", sY)
                     .put("endX", eX)
                     .put("endY", eY)
+                    .put("screen_resolution", metrics.toString())
                     .toString()
             }
         }
@@ -800,6 +800,7 @@ class DeviceActionController(private val context: Context) {
                 .put("startY", sY)
                 .put("endX", eX)
                 .put("endY", eY)
+                .put("screen_resolution", metrics.toString())
                 .toString()
         }
 
@@ -855,6 +856,7 @@ class DeviceActionController(private val context: Context) {
         val keycode = when (action.lowercase().trim()) {
             "back" -> 4
             "home" -> 3
+            "enter", "search" -> 66
             else -> 4
         }
         val shellOk = runCatching {

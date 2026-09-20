@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -34,6 +35,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.clickable
+import androidx.compose.material3.RadioButton
+import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.ui.permissions.PermissionSection
 
 /**
@@ -48,9 +52,11 @@ fun SettingsScreen(
     val screenshot by viewModel.screenshotEnabled.collectAsState()
     val hour by viewModel.alarmHour.collectAsState()
     val minute by viewModel.alarmMinute.collectAsState()
-    val geminiKey by viewModel.geminiKey.collectAsState()
+    val geminiKeys by viewModel.geminiKeys.collectAsState()
+    val selectedModel by viewModel.geminiModel.collectAsState()
 
-    var showKey by remember { mutableStateOf(false) }
+    var newKeyText by remember { mutableStateOf("") }
+    var showNewKey by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -78,41 +84,211 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(20.dp))
 
         // Intelligence / API Configuration
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Intelligence & Decision",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            if (geminiKeys.isNotEmpty()) {
+                Text(
+                    text = "${geminiKeys.size} key${if (geminiKeys.size > 1) "s" else ""} active",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Intelligence & Decision",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
+            text = "Round-robin pool: requests automatically rotate across all keys to distribute load and prevent 429 rate limits.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        OutlinedTextField(
-            value = geminiKey,
-            onValueChange = viewModel::updateGeminiKey,
-            label = { Text("Gemini API Key") },
-            placeholder = { Text("Enter your Google Gemini API key") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { showKey = !showKey }) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = if (showKey) "Hide key" else "Show key",
-                        tint = if (showKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
+        // Existing keys list
+        if (geminiKeys.isNotEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                geminiKeys.forEachIndexed { index, k ->
+                    val masked = if (k.length > 8) "${k.take(6)}...${k.takeLast(4)}" else "••••••••"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Key #${index + 1}: $masked",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    text = "Active in rotation",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { viewModel.removeGeminiKey(k) },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = "Remove key",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
                 }
-            },
-        )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        } else {
+            Text(
+                text = "No API keys added yet. Add at least one Gemini key to enable autonomous reasoning, memory, and chat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        // Add New API Key Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = newKeyText,
+                onValueChange = { newKeyText = it },
+                label = { Text("Add Gemini API Key") },
+                placeholder = { Text("Paste new API key") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                visualTransformation = if (showNewKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { showNewKey = !showNewKey }) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = if (showNewKey) "Hide key" else "Show key",
+                            tint = if (showNewKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                },
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledTonalButton(
+                onClick = {
+                    if (newKeyText.isNotBlank()) {
+                        viewModel.addGeminiKey(newKeyText.trim())
+                        newKeyText = ""
+                    }
+                },
+                enabled = newKeyText.isNotBlank(),
+            ) {
+                Text("Add")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
+        )
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // Model Target Selection
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Model Target",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = if (selectedModel == SettingsRepository.MODEL_31_FLASH_LITE) "3.1 Flash-Lite" else "3.5 Flash-Lite",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Enables autonomous reasoning, memories, and persona reflections",
+            text = "Gemini 3.5 and 3.1 maintain distinct free-tier quotas on Google AI Studio. Switch between them or let the agent fall back automatically if rate-limited.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val models = listOf(
+                SettingsRepository.MODEL_35_FLASH_LITE to Pair("Gemini 3.5 Flash-Lite", "Recommended · Balanced reasoning, multimodal vision, & tool calling"),
+                SettingsRepository.MODEL_31_FLASH_LITE to Pair("Gemini 3.1 Flash-Lite", "Lightweight · Separate free-tier quota & ultra-low latency"),
+            )
+            models.forEach { (modelId, info) ->
+                val (title, subtitle) = info
+                val isSelected = selectedModel == modelId
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.setGeminiModel(modelId) }
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(
+                        selected = isSelected,
+                        onClick = { viewModel.setGeminiModel(modelId) },
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
         HorizontalDivider(
@@ -233,7 +409,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Version 0.69.0",
+                    text = "Version 0.86.0",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

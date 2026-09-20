@@ -23,6 +23,8 @@ class CharacterViewModel(
     private val usageReader: UsageReader,
     private val baselineUpdater: BaselineUpdater,
     private val episodeDao: com.shiina.mobile.data.db.MemoryEpisodeDao? = null,
+    private val goalDao: com.shiina.mobile.data.db.GoalDao? = null,
+    private val sleepReader: com.shiina.mobile.observation.SleepReader? = null,
 ) : ViewModel() {
 
     private val _rememberedDays = MutableStateFlow(0)
@@ -96,15 +98,18 @@ class CharacterViewModel(
                 }
                 val baseline = baselineUpdater.getEntertainmentBaseline()
                 com.shiina.mobile.debug.AppDebugServer.log("LOGIC", "Usage minutes: $minutes, baseline: $baseline")
+                // LOOP-1: real goals + sleep reach the manual render too.
+                val goals = runCatching { goalDao?.all() }.getOrNull().orEmpty()
+                val bedMillis = runCatching { sleepReader?.getLatestBedMillis() }.getOrNull() ?: 0L
                 val decision = registry.decide(
                     DecisionSummary(
                         entertainmentMinutes = minutes,
                         entertainmentBaseline = baseline,
-                        sleepBedMillis = 0L,
+                        sleepBedMillis = bedMillis,
                         sleepBaselineMillis = 0L,
-                        goalsOpen = 0,
-                        goalsDone = 0,
-                        goalsMissed = 0,
+                        goalsOpen = goals.count { it.status == 0 },
+                        goalsDone = goals.count { it.status == 1 },
+                        goalsMissed = goals.count { it.status == 2 },
                     ),
                     source = "render",
                 )

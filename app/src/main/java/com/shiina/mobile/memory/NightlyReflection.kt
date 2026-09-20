@@ -6,7 +6,9 @@ import com.shiina.mobile.data.db.MemoryEpisode
 import com.shiina.mobile.data.db.MemoryEpisodeDao
 import com.shiina.mobile.data.db.MemoryFactDao
 import com.shiina.mobile.data.db.SleepDao
+import com.shiina.mobile.data.db.ToolStat
 import com.shiina.mobile.data.db.ToolStatDao
+import com.shiina.mobile.data.activity.UserActivityTracker
 import com.shiina.mobile.debug.AppDebugServer
 import com.shiina.mobile.decision.MemoryContext
 import java.util.Calendar
@@ -31,6 +33,7 @@ class NightlyReflection(
     private val compactor: MemoryCompactor,
     private val toolStatDao: ToolStatDao? = null,
     private val memoryConsolidator: MemoryConsolidator? = null,
+    private val activityTracker: UserActivityTracker? = null,
 ) {
 
     suspend fun run() {
@@ -39,7 +42,9 @@ class NightlyReflection(
         if (episodes.isNotEmpty()) {
             toneEffectiveness(episodes)
             adaptThreshold(episodes, now)
-            bestNudgeHour(episodes, now)
+            if (!bestNudgeHour(episodes, now)) rhythmFromActivity(now)
+        } else {
+            rhythmFromActivity(now)
         }
         learnBedtime()
         decayStaleFacts(now)
@@ -54,10 +59,23 @@ class NightlyReflection(
         AppDebugServer.log("MEMORY", "NightlyReflection done (${episodes.size} episodes reviewed)")
     }
 
-    private fun toneEffectiveness(episodes: List<MemoryEpisode>) {
+    /** MEM-3: tone effectiveness is persisted (tool_stats "tone:X" rows), not just logged. */
+    private suspend fun toneEffectiveness(episodes: List<MemoryEpisode>) {
         episodes.filter { it.interrupt }.groupBy { it.tone }.forEach { (tone, list) ->
             val landed = list.count { it.acted || it.talkedBack }
             AppDebugServer.log("MEMORY", "Tone $tone effectiveness: $landed/${list.size} landed")
+            runCatching {
+                val key = "tone:$tone"
+                val prev = toolStatDao?.get(key)
+                toolStatDao?.upsert(
+                    ToolStat(
+                        tool = key,
+                        attempts = (prev?.attempts ?: 0) + list.size,
+                        successes = (prev?.successes ?: 0) + landed,
+                        updatedMillis = System.currentTimeMillis(),
+                    ),
+                )
+            }
         }
     }
 
@@ -77,13 +95,30 @@ class NightlyReflection(
         AppDebugServer.log("MEMORY", "Interrupt threshold ${current.toInt()}% -> ${next.toInt()}%")
     }
 
-    private suspend fun bestNudgeHour(episodes: List<MemoryEpisode>, now: Long) {
+    /** Returns true when an acted-based nudge hour was found. */
+    private suspend fun bestNudgeHour(episodes: List<MemoryEpisode>, now: Long): Boolean {
         val hour = episodes.filter { it.acted }
             .groupingBy { hourOf(it.timestampMillis) }
             .eachCount()
-            .maxByOrNull { it.value }?.key ?: return
+            .maxByOrNull { it.value }?.key ?: return false
         baselineDao.upsert(BaselineSnapshot(MemoryContext.KEY_NUDGE_HOUR, hour.toDouble(), now))
         AppDebugServer.log("MEMORY", "Best nudge hour: $hour:00")
+        return true
+    }
+
+    /**
+     * MEM-10: when acted-interrupt data is too thin, time nudges from the
+     * user's real activity rhythm (14-day hour histogram) instead.
+     */
+    private suspend fun rhythmFromActivity(now: Long) {
+        val hist = runCatching { activityTracker?.activeHourHistogram() }.getOrNull().orEmpty()
+        if (hist.isEmpty()) return
+        val modeHour = hist.maxByOrNull { it.value }?.key ?: return
+        val topHours = hist.entries.sortedByDescending { it.value }.take(3).map { it.key }.sorted()
+        val window = "%02d:00-%02d:00".format(topHours.first(), (topHours.last() + 1) % 24)
+        runCatching { memoryStore.remember("active_window", window, "inferred") }
+        baselineDao.upsert(BaselineSnapshot(MemoryContext.KEY_NUDGE_HOUR, modeHour.toDouble(), now))
+        AppDebugServer.log("MEMORY", "Activity rhythm: window $window, nudge hour -> $modeHour:00")
     }
 
     /** Median bed time from the last 14 sleep records -> inferred fact. */

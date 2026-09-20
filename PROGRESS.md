@@ -6,6 +6,194 @@
 - **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
+- **2026-09-20 — Multi-Turn Redundancy Resolution, Dynamic Orientation Handling & Gesture Retry (v0.86.0):**
+  - **Investigation of Turn 8–13 Multi-Turn Redundancy**:
+    - Analyzed the live monitor logs (`/api/events`) from the AniLab2 automation run.
+    - Discovered that at Step 8, the search card tap was dispatched, but `TAKE_SCREENSHOT` at Step 9 fired after only 1000ms while the activity was still in the middle of a transition, capturing a stale frame.
+    - At Step 10, the agent believed the tap had failed and re-tapped at the exact moment the window transitioned, causing Android's `dispatchGesture` to be cancelled.
+    - `DeviceActionController.tapScreen` returned `"Could not tap screen. Ensure Accessibility Service is enabled in Settings."`, falsely convincing the AI that Accessibility had died and prompting it to invoke `OPEN_APP: com.xo.anilab`, throwing away progress and causing a 3-turn delay.
+  - **Dynamic Screen Orientation Learning ([ScreenMetrics.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/observation/ScreenMetrics.kt))**:
+    - Replaced static width/height storage with physical base dimensions (`baseShort` = `minOf(w, h)`, `baseLong` = `maxOf(w, h)`).
+    - Added dynamic orientation detection (`isLandscape()` via `Configuration.orientation` and `WindowManager` display rotation) and `getCurrentDimensions()` so that switching between portrait and landscape (e.g. fullscreen video playback) never inverts screen metrics or offsets normalized coordinate calculations.
+  - **Gesture Cancellation Auto-Retry ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:
+    - Added an automatic 150ms retry in `tap(x, y)` when `onCancelled` is received, ensuring momentary window animations or activity transitions do not drop tap gestures.
+  - **Truthful Error Diagnostics ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt))**:
+    - Differentiated between `service == null` (Accessibility Service genuinely disabled) and gesture cancellation or window busy states.
+    - Returns actionable diagnostic feedback instructing the agent not to restart the application when a tap is cancelled during transitions.
+  - **Optimized UI Settle Delay ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Increased `waitMs` for `TAP_SCREEN` from 1000ms to 1500ms, giving complex activity transitions, card clicks, and network loads sufficient time to render before `TAKE_SCREENSHOT` captures the verification frame.
+  - **Version Bump**:
+    - Bumped `versionCode = 86`, `versionName = "0.86.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Automatic Screen Resolution Learning & True Coordinate Mapping (v0.85.0):**
+  - **ScreenMetrics Resolution Learner ([ScreenMetrics.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/observation/ScreenMetrics.kt))**:
+    - Created dedicated `ScreenMetrics` component that automatically learns the real physical screen resolution via `WindowManager` real metrics (`maximumWindowMetrics` / `getRealMetrics`) and updates/confirms with actual captured screenshot bitmap dimensions.
+    - Persists learned resolution across app restarts in SharedPreferences.
+    - Provides precise `toPixels(x, y)` mapping from normalized `0..1000` AI vision space to true physical screen pixels, eliminating vertical and horizontal offsets caused by system bars (status bar, navigation bar).
+  - **Accurate Tap & Swipe Dispatching ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt), [ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:
+    - In `tapScreen`, when visual coordinates `(x >= 0, y >= 0)` are specified, prioritized coordinate tapping mapped with learned `ScreenMetrics` over text matching. Prevents `clickText` from intercepting coordinate taps and clicking input fields containing search queries.
+    - Added `lineTo(x, y)` in `ShiinaAccessibilityService.tap` to ensure OEM touch controllers (e.g. Samsung OneUI, MIUI) properly register touch gestures.
+    - Updated `swipeScreen` to accurately translate start/end coordinates and directional offsets using learned screen bounds.
+  - **Senses & Prompt Context Injection ([DeviceSenses.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/observation/DeviceSenses.kt), [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), [ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Added `screen_resolution` to `DeviceSenses.snapshot()`.
+    - Injected `- Screen Resolution: {width}x{height} (normalized 0..1000)` into `# Live Context & Device Senses` in `DebugTalkService`.
+    - Clarified normalized coordinate bounds `(0,0 is top-left, 1000,1000 is bottom-right)` in system prompt rules.
+  - **Version Bump**:
+    - Bumped `versionCode = 85`, `versionName = "0.85.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Tap Hierarchy Elimination & Pure Visual Grounding (v0.84.0):**
+  - **Eliminated Tap Hierarchy Injections ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Removed `# Live Screen Grounding Hierarchy (Turn 1)` and loop turn `# Live Screen Grounding Hierarchy` prompt injections.
+    - Eliminates massive context clutter, stale text dumps, and misleading node labels (such as search query text in editable input fields) that caused the AI to make incorrect tapping decisions.
+  - **Visual Ground Truth & Coordinate Targeting ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Updated Rule 2 (`VISUAL GROUND TRUTH & SCREENSHOT-FIRST INTERACTION`) and `TASK WORKFLOW` to target elements directly from visual screenshots using normalized coordinates `(x: 0..1000, y: 0..1000)` or exact visible `text` in `TAP_SCREEN`.
+    - Removed `element_id` and screen hierarchy references from system prompts and tool schemas.
+    - Updated `APPS_TOOLSET` and `DEVICE_TOOLSET` in `ToolCatalog.kt` to focus `TAP_SCREEN` on coordinates/text and removed `INSPECT_SCREEN`.
+  - **Version Bump**:
+    - Bumped `versionCode = 84`, `versionName = "0.84.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — System Prompt Screenshot Priority Over Text Details (v0.83.0):**
+  - **System Prompt Screenshot Priority ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Updated Rule 2 to `PRIORITIZE TAKING SCREENSHOTS OVER TEXT DETAILS`: mandates calling `TAKE_SCREENSHOT` over relying on text details whenever the agent needs to observe screen state, verify search results, or confirm actions.
+    - Explicitly noted that textual screen hierarchy details are only a rough summary that can contain stale text, input field contents, or incomplete labels, whereas visual screenshots represent the true ground truth.
+    - Updated `TASK WORKFLOW` and `CORE RULES` to emphasize taking screenshots before deciding actions or choosing element IDs.
+  - **Clean Code Architecture ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Reverted synthetic header overrides and automatic capture hooks to keep the engine clean, modular, and driven directly by the AI calling `TAKE_SCREENSHOT`, while preserving the 1-second turn pacing guarantee.
+  - **Version Bump**:
+    - Bumped `versionCode = 83`, `versionName = "0.83.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Multimodal Vision Priority & Turn 1 Ground Truth Architecture (v0.82.0):**
+  - **Multimodal Part Ordering & Turn 1 Screenshot ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Reordered multimodal Gemini request parts so the screenshot image (`inline_data`) is placed as the first part (`parts[0]`) before the prompt text (`parts[1]`), establishing visual reality as the primary perception modality.
+    - Updated initial turn initialization to capture and attach the live screenshot on Turn 1 whenever `screenshotTaker.ready` is true, ensuring the model never begins execution blind.
+    - Structured prompt headers to explicitly designate `# Visual Screen Perception (PRIMARY GROUND TRUTH)` vs `# Screen Coordinate Reference (SECONDARY TO SCREENSHOT)`.
+  - **Version Bump**:
+    - Bumped `versionCode = 82`, `versionName = "0.82.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — 1-Second Turn Pacing & Animation Settle Guarantee (v0.81.0):**
+  - **Turn Pacing & Animation Settle ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Enforced a minimum 1-second delay (`1000ms`, with `2000ms` for `OPEN_APP`) between turns in the agent loop.
+    - Prevents the agent from executing UI actions too quickly, giving UI transitions, network requests, and animations ample time to settle while allowing the user to visually follow agent interactions.
+  - **Version Bump**:
+    - Bumped `versionCode = 81`, `versionName = "0.81.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Visual Ground Truth & Screenshot-First Hierarchy Grounding (v0.80.0):**
+  - **Visual Ground Truth Over Text Output ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Prioritized visual screenshots over textual hierarchy output: the screenshot is the ground truth of what is visually on screen (actual video playback, poster cards, open keyboard, dialogs), while the Live Screen Grounding Hierarchy serves as an `element_id` and coordinate targeting reference.
+    - Added explicit rule preventing the agent from confusing input fields (`[Input Field: "..."]`) holding typed search queries with clickable search result cards.
+  - **Editable Field Differentiation & Enter/Search Key Support ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt), [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - Updated `getScreenElementsSummary()` to clearly label editable elements as `[Input Field: "text"]` or `[Editable Input Field]`, ensuring the model never mistakes its own typed query for a clickable content card.
+    - Added support for `"enter"` and `"search"` in `PRESS_KEY` (keycode 66) to allow submitting search queries.
+  - **Direct Coordinate Physical Tap & Automatic Screenshot Attachment ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt), [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - In `clickElementById`, prioritized direct physical tap at element center coordinates over `clickNodeByText` to ensure real touch events (`MotionEvent.ACTION_DOWN` / `ACTION_UP`) are dispatched to custom views, cards, and video players.
+    - Increased tap stroke duration to 100ms (standard Android tap timeout) with debug logging.
+    - Updated `runTool` so UI actions automatically capture and attach fresh screen frames on subsequent turns when `screenshotTaker` is ready.
+  - **Version Bump**:
+    - Bumped `versionCode = 80`, `versionName = "0.80.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Critical Decision-Making & Match Integrity, Silent Step Headroom, & Turn Counter Removal (v0.79.0):**
+  - **Removed Turn Limits & Step Countdowns ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Removed `lastTurnsLeft` and all `[Step N/M · K left]` prefixes from on-screen bubble messages to eliminate distracting countdown clutter and visual noise.
+    - Removed `turns=N/15` and `Turns left: N/15` from the debug notification panel.
+    - Removed `($remainingTurns turns remaining)` and urgent countdown wrap-up warnings from `# Agent Execution State` in the prompt, while increasing `MAX_AGENT_STEPS = 25` to provide ample execution headroom without artificial pressure.
+  - **Critical Decision-Making & Match Integrity Rules ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Added Rule 2 `CRITICAL DECISION MAKING & MATCH INTEGRITY`: general, proper system prompt forbidding tapping unrelated search results or items that do not match the user's requested title without mentioning specific names or titles. Required to verify matches before acting, refine query/scroll, or honestly report unavailability rather than blindly opening incorrect cards.
+    - Added Rule 3 `NO REPETITIVE BLIND ACTIONS`: forbids repeatedly tapping the same element (e.g. card/button) if the screen state does not advance after 2 attempts. Required to dismiss keyboards, scroll, or try alternatives.
+    - Added `MATCH VERIFICATION` step to `TASK WORKFLOW` and reinforced `- NEVER OPEN WRONG SEARCH RESULTS` in `CORE RULES`.
+  - **Version Bump**:
+    - Bumped `versionCode = 79`, `versionName = "0.79.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Zero JSON Speech Leakage Shield & Final Speech Enforcement (v0.78.0):**
+  - **Eliminated Raw JSON Leakage ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Fixed root cause where an empty `step.message` on completion fell back to the model's raw output string (`raw`), causing raw JSON (`{"thought": ..., "status": "DONE", ...}`) to be emitted directly to the user.
+    - Added comprehensive JSON interception shield in both `isDone` and post-loop completion: any message starting with `{` or containing `"thought":` or `"status":` is intercepted, parsed for an inner text message, or synthesized into clean, authentic conversational speech.
+    - Updated `stepSchema` with an explicit description on `message`: `"Natural conversational response spoken to the user. MANDATORY when status is DONE. Only omit or leave empty \"\" when executing intermediate tools silently."`
+  - **Prompt Rules Hardening ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Added explicit rule `- NEVER EMIT RAW JSON AS SPEECH: The 'message' property must contain pure conversational natural speech. Never put JSON, schemas, code blocks, or thoughts into 'message'.`
+    - Updated `TOOL_SPEC` to mandate conversational text in `message` when `status: 'DONE'`.
+  - **Version Bump**:
+    - Bumped `versionCode = 78`, `versionName = "0.78.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Silent Intermediate Execution & Guaranteed Final Talk Protocol (v0.77.0):**
+  - **Optional Intermediate Message in JSON Schema ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Removed `message` from the `required` fields array in `stepSchema` (`required: ["thought", "status", "tool"]`). The model is no longer forced to invent dialogue during action turns.
+    - During intermediate execution turns (`status: 'CONTINUE'`), if `step.message` is blank, the agent acts completely silently without pushing anything to the character bubble overlay.
+  - **Guaranteed Speech at Final Completion ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - When `status: 'DONE'`, speech is strictly guaranteed: if `step.message` was empty, an automatic synthesis pass produces the final conversational reply grounded in the steps taken before returning and showing it on the overlay.
+  - **Prompt & Tool Protocol Synchronization ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), [sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md))**:
+    - Updated `TOOL_SPEC` and `TASK WORKFLOW`: instructs the agent to work silently (`message: ''`) during intermediate tool execution (`GET_TOOLSET`, actions, `TAKE_SCREENSHOT`) unless there is critical information to convey.
+    - Formally documents that talking is guaranteed and required at the final step when `status: 'DONE'`.
+  - **Version Bump**:
+    - Bumped `versionCode = 77`, `versionName = "0.77.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Multi-Model Selection (Gemini 3.5 & 3.1 Flash-Lite), Automatic 429 Failover, & Turns Counter (v0.76.0):**
+  - **In-App Model Target Selection ([SettingsRepository.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/settings/SettingsRepository.kt), [SettingsViewModel.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsViewModel.kt), [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt))**:
+    - Added persistent DataStore preference `gemini_model` allowing users to select between `gemini-3.5-flash-lite` (default, balanced reasoning/vision) and `gemini-3.1-flash-lite` (lightweight, separate Google AI Studio quota).
+    - Designed Material 3 Model Selection card in Settings with detailed explanations and radio selection.
+  - **Automatic 429 Failover to Alternate Model ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - In `postText`, requests target the user's chosen model. If HTTP 429 (quota rate limit) is encountered, it reports the key to the cooldown pool and automatically fails over to the alternate model (`gemini-3.1-flash-lite` or `gemini-3.5-flash-lite`) which maintains an independent quota pool.
+    - Updated [GeminiProvider.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/GeminiProvider.kt) and [MemoryConsolidator.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/MemoryConsolidator.kt) to dynamically respect the selected model.
+  - **Agent Loop Turns Counter ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Added `@Volatile private var lastTurnsLeft: Int = 15`.
+    - Real-time overlay status display: `[Step ${calls + 1}/15 · ${15 - (calls + 1)} left] <progress message>`.
+    - Live notification debug panel updates: displays `turns: $lastTurnsLeft/15` in the title and `Turns left: $lastTurnsLeft/15` in the expanded panel text.
+    - Injected into prompt `# Agent Execution State`: `- Current step: #${calls} of max 15 ($remainingTurns turns remaining)`. Injects urgent wrap-up directive when `remainingTurns <= 3`.
+  - **Version Bump**:
+    - Bumped `versionCode = 76`, `versionName = "0.76.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Round-Robin API Key Pool & Multi-Key Settings Management (v0.75.0):**
+  - **Round-Robin Key Pool Core ([RoundRobinKeyPool.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/RoundRobinKeyPool.kt), [AppContainer.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/di/AppContainer.kt))**:
+    - Upgraded `RoundRobinKeyPool` with fallback capability (if all keys hit cooldown, it rotates to the next key instead of returning null) and added `size()` helper.
+    - Promoted `geminiKeyPool` to a public property on `AppContainer` shared across `ProviderRegistry`, `DebugTalkService`, and `MemoryConsolidator`.
+  - **Multi-Key Storage ([KeyStoreKeys.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/security/KeyStoreKeys.kt))**:
+    - Added `addKey(provider, key)` and `removeKey(provider, key)` methods to safely manage multiple API keys in encrypted shared preferences.
+  - **Automatic Failover & 429 Resilience ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), [MemoryConsolidator.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/MemoryConsolidator.kt))**:
+    - In `postText`, dynamically rotates keys via `keyPool.next()` across attempts.
+    - If a key returns HTTP 429, it puts the offending key on a 60-second cooldown and automatically falls over to the next key in the pool, preventing rate limit errors.
+  - **Settings UI for Multi-Key Pool ([SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt), [SettingsViewModel.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsViewModel.kt))**:
+    - Added list of active keys in rotation (masked with `••••••••`) with one-tap removal (`Delete` icon).
+    - Added "Add Gemini API Key" input row with an "Add" button and password toggle.
+    - Displays live key pool count badge (`N keys active in pool`).
+  - **Version Bump**:
+    - Bumped `versionCode = 75`, `versionName = "0.75.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Dynamic Mood Balancing & Explicit Visual Screenshot Workflow (v0.74.0):**
+  - **Dynamic Mood Balancing & Peer Dignity Protocol ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - Added `PEER DIGNITY & EMOTIONAL BOUNDARIES` to `GLOBAL_RULES`: Shiina is an equal peer with self-respect; when the user is rude, insulting, or disrespectful, she does not laugh it off with banter or act like a subservient bot—she switches to `firm` or `pouty` and sets direct boundaries.
+    - Expanded `MOOD_PROMPTS`: `pouty` (sulky, offended, hurt by dismissal/harshness, neglected), `firm` (stern accountability, calling out disrespect, setting boundaries), `warm` (soothing, validates feelings, softens when user apologizes).
+    - Updated `TOOL_SPEC` with balanced `MOOD TRIGGERS` across all 5 moods (`calm`, `candid`, `firm`, `warm`, `pouty`).
+  - **Explicit TAKE_SCREENSHOT Workflow ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - Empowered the AI to explicitly control when to capture and inspect the screen by calling `TAKE_SCREENSHOT` (status: `CONTINUE`).
+    - When `TAKE_SCREENSHOT` is invoked, a fresh screen frame is captured and attached as an image on the subsequent turn, with an explicit directive prompting visual verification against the primary goal.
+    - Updated `ToolCatalog.kt` to clearly document `TAKE_SCREENSHOT` in `APPS_TOOLSET` and `DEVICE_TOOLSET`.
+  - **Graceful Gemini 429 Handling ([MemoryConsolidator.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/MemoryConsolidator.kt))**:
+    - Added graceful handling for HTTP 429 (Too Many Requests / Rate Limit) during background memory consolidation so it logs a gentle warning instead of alarming errors.
+  - **Static Prompt Sync & Version Bump ([sysprompt.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/sysprompt.md), [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts), [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt))**:
+    - Synchronized `sysprompt.md` with new static rules and tool specs.
+    - Bumped `versionCode = 74`, `versionName = "0.74.0"`.
+- **2026-09-20 — Agent Guidelines Hardening: Universal Think-Act-Observe-Verify & Zero Bypasses (v0.72.0):**
+  Codified mandatory agent behavior in [agent.md](file:///home/janelle/Documents/GitHub/Mobile-assistant/agent.md) to permanently prevent domain-narrow hallucinations (e.g. music/anime focus) and hardcoded shortcuts:
+  - **Rule 17 (Universal Protocol & Zero Bypasses)**: Prohibits hardcoded task bypasses, keyword regexes, or task-specific shortcuts; forbids domain-narrow rules; mandates automatic live vision on every turn (no guessing); establishes precision UI targeting priority (`element_id` > `text` > coordinates).
+  - **Rule 18 (Mandatory Visual Goal Verification & Persistent Execution)**: Forbids stopping at intermediate steps or unprompted hand-offs to the user; mandates keeping `status: 'CONTINUE'` until the screen visually confirms goal completion before setting `status: 'DONE'`.
+  - **Version & UI Update**:
+    - Bumped `versionCode = 72`, `versionName = "0.72.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Universal Think-Act-Observe-Verify Protocol, Every-Turn Vision & Elimination of Bypasses (v0.71.0):**
+  Addressed user directive to remove all hardcoded task bypasses/heuristics and universalize the loop logic across all tasks (not just music or anime/video), enforcing continuous visual verification on every turn:
+  - **Loop Core Universalization ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Completely removed hardcoded bypass functions (`isMultiStepGoal`, `isStopOrCancelCommand`, `isGoalAchieved`) and premature completion interceptor.
+    - Implemented universal visual perception on every turn: Turn 1 captures and attaches an initial screenshot, and every subsequent turn attaches the live screenshot (`attachShot = hasScreenshot`) alongside `# Live Screen Grounding Hierarchy`.
+    - Automatically waits 700ms for UI transition and captures a fresh screenshot after every action tool.
+    - Injects universal `nextInstruction` compelling the model to inspect the live screenshot, verify outcome against the user's primary goal, keep `status: 'CONTINUE'` until the goal is visually achieved, and only conclude with `status: 'DONE'` when the screen visually confirms goal completion (or if the user commands to stop).
+  - **Universal Prompts & Rules ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - In `GLOBAL_RULES`, updated to `UNIVERSAL GOAL PERSISTENCE & MANDATORY VERIFICATION`: applies to all tasks (media, apps, settings, search, UI interaction). Forbids premature `status: 'DONE'` or asking the user to finish the task; mandates every-turn screenshot analysis and visual confirmation of goal completion before finishing.
+    - In `TOOL_SPEC`, generalized section 3 to `SCREEN AUTOMATION & VISUAL GROUNDING WORKFLOW`: emphasizes no guessing, refreshed screenshots on every turn, and mandatory visual goal verification.
+    - In `CORE TASK RULES`, updated Rule 8 to `UNIVERSAL VISUAL GOAL VERIFICATION`.
+  - **Tool Catalog Generalization ([ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - Replaced media-specific guidelines in `APPS_TOOLSET` with universal mandatory visual goal verification.
+  - **Version & UI Update**:
+    - Bumped `versionCode = 71`, `versionName = "0.71.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+- **2026-09-20 — Mandatory Goal Verification, Playback Enforcement & Premature Completion Interception (v0.70.0):**
+  Addressed issue where Shiina stopped prematurely after merely opening an application without verifying that the user's primary goal (e.g. playing an anime/video/song) was actually achieved:
+  - **Premature Completion Interceptor ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt))**:
+    - Added `isMultiStepGoal(userText)`, `isStopOrCancelCommand(text)`, and `isGoalAchieved(userText, steps, screenElements)`.
+    - In `askGemini`, intercepted cases where the model declared `status: 'DONE', tool: 'NONE'` before verified playback occurred (e.g. only opened app or only navigated to search). The harness rejects premature completion, logs the interception, captures a fresh screenshot, dumps the screen hierarchy, and injects a high-priority directive compelling the agent to continue until playback is verified on screen.
+    - Added explicit `- Primary Goal: "$userText"` and `- Goal Status: IN PROGRESS / PLAYBACK VERIFIED` tracking in `# Agent Execution State` on every loop turn.
+    - Honors user stop/cancel commands immediately.
+  - **Goal Persistence & Mandatory Verification Rules ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - In `GLOBAL_RULES`, added `GOAL PERSISTENCE & MANDATORY VERIFICATION`: strictly forbids stopping after merely opening an app, forbids asking the user to take over, and mandates verifying active playback on screen before setting status `DONE`.
+    - In `TOOL_SPEC` and Rule 8, formulated Mandatory Playback Verification: instructs that if the screen shows cards, tap one; if details page, tap Play/Episode 1; and keep status `CONTINUE` until playback is verified on the attached screenshot.
+  - **Tool Catalog Updates ([ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - In `APPS_TOOLSET`, updated guidelines with Mandatory Task Completion & Verification.
+  - **Version & UI Update**:
+    - Bumped `versionCode = 70`, `versionName = "0.70.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts) and [SettingsScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
 - **2026-09-20 — UI Hierarchy Grounding, Precision Screen Tapping & Element-ID Selection (v0.69.0):**
   Addressed coordinate drift and visual targeting error on high-resolution displays (1080x2310) by implementing direct UI hierarchy inspection and element-ID-based screen interaction:
   - **UI Hierarchy Grounding ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:

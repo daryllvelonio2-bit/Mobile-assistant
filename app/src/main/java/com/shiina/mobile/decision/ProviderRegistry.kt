@@ -34,6 +34,7 @@ class ProviderRegistry(
     private val senses: DeviceSenses? = null,
     private val settings: SettingsRepository? = null,
     private val baselineDao: BaselineDao? = null,
+    private val moodEngine: com.shiina.mobile.character.MoodEngine? = null,
 ) {
 
     suspend fun decide(summary: DecisionSummary, source: String = "unknown"): Decision =
@@ -74,12 +75,16 @@ class ProviderRegistry(
                 AppDebugServer.log("DECISION", "Presence-only mode: interrupt suppressed")
                 final = silence(final)
             }
+            // Dynamic Mood Balancing: the round's tone nudges the persistent
+            // emotional vector instead of overwriting it.
+            runCatching { moodEngine?.applyModelExpression(ShiinaPrompts.moodForTone(final.tone)) }
             logEpisode(summary, final, source, usedFallback = generated == null)
             // C11: one structured line per round for regression debugging.
+            val liveMood = runCatching { moodEngine?.currentMood() }.getOrNull() ?: "?"
             AppDebugServer.log(
                 "DECISION_LOG",
                 "source=$source tone=${final.tone} interrupt=${final.interrupt} " +
-                    "confidence=${final.confidence} action=${final.action} " +
+                    "confidence=${final.confidence} action=${final.action} mood=$liveMood " +
                     "latencyMs=${System.currentTimeMillis() - started} " +
                     "prompt=${ShiinaPrompts.PROMPT_VERSION} fallback=${generated == null}",
             )

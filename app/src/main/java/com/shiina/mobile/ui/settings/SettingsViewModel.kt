@@ -30,6 +30,14 @@ class SettingsViewModel(
     val alarmMinute = settings.alarmMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    val geminiModel = settings.geminiModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsRepository.DEFAULT_MODEL)
+
+    private val _geminiKeys = MutableStateFlow(
+        keyStore.getKeys("gemini")
+    )
+    val geminiKeys: StateFlow<List<String>> = _geminiKeys
+
     private val _geminiKey = MutableStateFlow(
         keyStore.getKeys("gemini").firstOrNull().orEmpty()
     )
@@ -52,6 +60,10 @@ class SettingsViewModel(
         loadFacts()
     }
 
+    fun setGeminiModel(model: String) {
+        viewModelScope.launch { settings.setGeminiModel(model) }
+    }
+
     fun toggleScreenshot(enabled: Boolean) {
         viewModelScope.launch { settings.setScreenshotEnabled(enabled) }
     }
@@ -60,9 +72,30 @@ class SettingsViewModel(
         viewModelScope.launch { settings.setAlarm(hour, minute) }
     }
 
+    fun addGeminiKey(key: String): Boolean {
+        val added = keyStore.addKey("gemini", key)
+        if (added) {
+            val updated = keyStore.getKeys("gemini")
+            _geminiKeys.value = updated
+            _geminiKey.value = updated.firstOrNull().orEmpty()
+        }
+        return added
+    }
+
+    fun removeGeminiKey(key: String) {
+        val removed = keyStore.removeKey("gemini", key)
+        if (removed) {
+            val updated = keyStore.getKeys("gemini")
+            _geminiKeys.value = updated
+            _geminiKey.value = updated.firstOrNull().orEmpty()
+        }
+    }
+
     fun updateGeminiKey(key: String) {
         _geminiKey.value = key
-        keyStore.setKeys("gemini", listOf(key.trim()).filter { it.isNotEmpty() })
+        val keys = listOf(key.trim()).filter { it.isNotEmpty() }
+        keyStore.setKeys("gemini", keys)
+        _geminiKeys.value = keys
     }
 
     fun loadFacts() {

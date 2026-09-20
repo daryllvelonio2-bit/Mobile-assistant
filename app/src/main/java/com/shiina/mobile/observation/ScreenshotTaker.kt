@@ -27,12 +27,16 @@ object CaptureConsent {
  * No loops here: callers (CaptureWatcher) own rate limits. Frames land in
  * app-private storage only and old ones are pruned.
  */
-class ScreenshotTaker(private val context: Context) {
+class ScreenshotTaker(
+    private val context: Context,
+    private val screenMetrics: ScreenMetrics? = null,
+) {
 
     private val lock = Mutex()
 
     @Volatile private var projection: MediaProjection? = null
-    val ready: Boolean get() = projection != null
+    val ready: Boolean get() = projection != null ||
+            (com.shiina.mobile.action.ShiinaAccessibilityService.isEnabled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
 
     fun setProjection(mp: MediaProjection) {
         release()
@@ -47,14 +51,28 @@ class ScreenshotTaker(private val context: Context) {
 
     suspend fun capture(reason: String): File? = withContext(Dispatchers.IO) {
         lock.withLock {
-            val mp = projection ?: run {
-                AppDebugServer.log("CAPTURE", "Capture skipped ($reason): no consent")
-                return@withContext null
+            val mp = projection
+            if (mp != null) {
+                val file = runCatching { grabFrame(mp, reason) }.getOrNull()
+                if (file != null) return@withContext file
             }
-            runCatching { grabFrame(mp, reason) }.getOrElse { e ->
-                AppDebugServer.log("ERROR", "Capture failed ($reason): ${e.message}")
-                null
+            // Fallback: capture directly via AccessibilityService (Android 11+) without MediaProjection consent
+            val a11y = com.shiina.mobile.action.ShiinaAccessibilityService.instance
+            if (a11y != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                val bitmap = runCatching { a11y.captureScreenshot() }.getOrNull()
+                if (bitmap != null) {
+                    screenMetrics?.updateFromBitmap(bitmap)
+                    val dir = File(context.filesDir, "captures").apply { mkdirs() }
+                    val out = File(dir, "cap_${System.currentTimeMillis()}_$reason.jpg")
+                    out.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+                    bitmap.recycle()
+                    prune(dir)
+                    AppDebugServer.log("CAPTURE", "Saved ${out.name} ($reason via Accessibility)")
+                    return@withContext out
+                }
             }
+            AppDebugServer.log("CAPTURE", "Capture skipped ($reason): no consent or accessibility screenshot available")
+            null
         }
     }
 
@@ -94,6 +112,7 @@ class ScreenshotTaker(private val context: Context) {
                 padded.copyPixelsFromBuffer(buffer)
                 val cropped = Bitmap.createBitmap(padded, 0, 0, width, height)
                 padded.recycle()
+                screenMetrics?.updateFromBitmap(cropped)
                 val dir = File(context.filesDir, "captures").apply { mkdirs() }
                 val out = File(dir, "cap_${System.currentTimeMillis()}_$reason.jpg")
                 out.outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 80, it) }

@@ -29,6 +29,8 @@ class GeminiProvider(
     private val episodeDao: com.shiina.mobile.data.db.MemoryEpisodeDao,
     private val model: String = "gemini-3.5-flash-lite",
     private val goalDao: GoalDao? = null,
+    private val moodEngine: com.shiina.mobile.character.MoodEngine? = null,
+    private val settingsRepository: com.shiina.mobile.data.settings.SettingsRepository? = null,
 ) : DecisionProvider {
 
     override val name = "gemini"
@@ -43,7 +45,8 @@ class GeminiProvider(
             com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "No Gemini API keys found in KeyStore")
             throw IllegalStateException("no gemini keys")
         }
-        com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Calling Gemini API (model=$model, prompt=${ShiinaPrompts.PROMPT_VERSION})...")
+        val activeModel = runCatching { settingsRepository?.getGeminiModel() }.getOrNull() ?: model
+        com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Calling Gemini API (model=$activeModel, prompt=${ShiinaPrompts.PROMPT_VERSION})...")
         try {
             val promptText = prompt(summary, memoryContext, senses)
             val parts = JSONArray().put(JSONObject().put("text", promptText))
@@ -77,7 +80,7 @@ class GeminiProvider(
                 .toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
+                .url("https://generativelanguage.googleapis.com/v1beta/models/$activeModel:generateContent?key=$key")
                 .post(body)
                 .build()
 
@@ -112,7 +115,11 @@ class GeminiProvider(
     private suspend fun prompt(summary: DecisionSummary, memoryContext: String, senses: String): String {
         val base = summary.entertainmentBaseline.coerceAtLeast(1.0)
         val pctOver = ((summary.entertainmentMinutes - base) / base * 100).toInt()
-        val mood = ShiinaPrompts.currentMood(episodeDao)
+        // Dynamic Mood Balancing: mood comes from the persistent engine state,
+        // not just the last decision tone.
+        val mood = runCatching { moodEngine?.currentMood() }.getOrNull()
+            ?: ShiinaPrompts.currentMood(episodeDao)
+        val emotionBlock = runCatching { moodEngine?.promptBlock() }.getOrNull().orEmpty()
         val goals = runCatching {
             goalDao?.all()?.filter { it.status == 0 }?.take(3)
                 ?.joinToString("; ") { it.title.take(30) }.orEmpty()
@@ -121,6 +128,7 @@ class GeminiProvider(
             appendLine("# Persona & Tone")
             appendLine(ShiinaPrompts.GLOBAL_RULES)
             appendLine(ShiinaPrompts.moodPrompt(mood))
+            if (emotionBlock.isNotBlank()) appendLine(emotionBlock)
             appendLine()
 
             appendLine("# Interruption & Presence Policy")
@@ -140,6 +148,11 @@ class GeminiProvider(
             appendLine("- ${senses.ifBlank { ShiinaPrompts.timeLine(context) }}")
             appendLine("- Entertainment: ${summary.entertainmentMinutes}min vs 7-day baseline ${summary.entertainmentBaseline.toInt()}min (${if (pctOver >= 0) "+" else ""}${pctOver}% over)")
             appendLine("- Goals: open=${summary.goalsOpen}, done=${summary.goalsDone}, missed=${summary.goalsMissed}${if (goals.isNotBlank()) " (open titles: $goals)" else ""}")
+            // LOOP-1: real sleep data reaches the prompt when Health Connect has it.
+            if (summary.sleepBedMillis > 0L) {
+                val hoursSince = (System.currentTimeMillis() - summary.sleepBedMillis) / 3_600_000.0
+                appendLine("- Last sleep session started ${"%.1f".format(hoursSince)}h ago (${java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault()).format(java.util.Date(summary.sleepBedMillis))}).")
+            }
             appendLine()
 
             if (memoryContext.isNotBlank()) {
@@ -153,12 +166,15 @@ class GeminiProvider(
             appendLine("tone MUST be one of: neutral | candid_direct | firm_warning | validating.")
             appendLine("spoken_message must be <=140 chars.")
             appendLine("JSON structure:")
-            appendLine("{\"should_interrupt\":<boolean>,\"confidence\":<0.0-1.0>,\"confidence_reason\":\"<1 short sentence: which metric triggered this>\",\"tone\":\"<neutral|candid_direct|firm_warning|validating>\",\"spoken_message\":\"<exact words spoken to user, or null>\",\"recommended_action\":{\"type\":\"<NONE|SET_ALARM|TOGGLE_SCREENSHOT|LOG_GOAL|LEARN_FACT|SEARCH_WEB|TAKE_SCREENSHOT|READ_URL|CHECK_GOALS|SET_REMINDER|COMPLETE_GOAL|HIDE|SET_MODE>\",\"parameters\":{\"key\":\"<LEARN_FACT: fact name>\",\"value\":\"<LEARN_FACT: fact value | SEARCH_WEB: query | READ_URL: url | SET_REMINDER: text | COMPLETE_GOAL: goal title>\",\"mode\":\"<SET_MODE: WANDER|STAY|VANISH>\",\"title\":\"<LOG_GOAL: goal title>\"}},\"extra_actions\":[{\"type\":\"<verb>\",\"param\":\"<parameter>\"}]}")
+            appendLine("{\"should_interrupt\":<boolean>,\"confidence\":<0.0-1.0>,\"confidence_reason\":\"<1 short sentence: which metric triggered this>\",\"tone\":\"<neutral|candid_direct|firm_warning|validating>\",\"spoken_message\":\"<exact words spoken to user, or null>\",\"recommended_action\":{\"type\":\"<NONE|SET_ALARM|TOGGLE_SCREENSHOT|LOG_GOAL|LEARN_FACT|REMEMBER|SEARCH_WEB|TAKE_SCREENSHOT|READ_URL|CHECK_GOALS|SET_REMINDER|LIST_REMINDERS|CANCEL_REMINDER|COMPLETE_GOAL|HIDE|SET_MODE|MEDIA_CONTROL|PLAY_MUSIC|SEARCH_MUSIC|VOLUME_CONTROL|DEVICE_ACTION|OPEN_APP|SEARCH_APP|LIST_APPS|GET_DEVICE_STATE>\",\"parameters\":{\"key\":\"<LEARN_FACT/REMEMBER: fact name>\",\"value\":\"<LEARN_FACT: fact value | SEARCH_WEB: query | READ_URL: url | SET_REMINDER: text | COMPLETE_GOAL: goal title | CANCEL_REMINDER: id or text | OPEN_APP/SEARCH_APP: app | PLAY_MUSIC: song | SEARCH_MUSIC: query | MEDIA_CONTROL: play/pause/next/prev | VOLUME_CONTROL: up/down/mute>\",\"text\":\"<REMEMBER: fact value | SET_REMINDER: text>\",\"mode\":\"<SET_MODE: WANDER|STAY|VANISH>\",\"title\":\"<LOG_GOAL: goal title>\"}},\"extra_actions\":[{\"type\":\"<verb>\",\"param\":\"<parameter>\"}]}")
             appendLine("Action Guidelines:")
             appendLine("- Use SET_MODE with mode WANDER, STAY, or VANISH to manage avatar presence;")
             appendLine("- Use HIDE to hide overlay;")
             appendLine("- Use SEARCH_WEB when external info is needed;")
-            appendLine("- Use TAKE_SCREENSHOT when looking at the screen would answer a question.")
+            appendLine("- Use TAKE_SCREENSHOT when looking at the screen would answer a question;")
+            appendLine("- Use SET_REMINDER with parameters.text like 'remind me to X at 8pm'; LIST_REMINDERS to show pending reminders; CANCEL_REMINDER with the reminder id or text to cancel one;")
+            appendLine("- Use OPEN_APP with an app name, PLAY_MUSIC with a song, MEDIA_CONTROL with play/pause/next/prev, VOLUME_CONTROL with up/down/mute;")
+            appendLine("- SET_REMINDER, LOG_GOAL, LEARN_FACT, REMEMBER, CHECK_GOALS and TAKE_SCREENSHOT may run even when should_interrupt is false — she does the chore silently.")
         }
     }
 
@@ -198,7 +214,7 @@ class GeminiProvider(
             val extras = mutableListOf<Pair<String, String>>()
             json.optJSONArray("extra_actions")?.let { arr ->
                 var i = 0
-                while (i < arr.length() && extras.size < 2) {
+                while (i < arr.length() && extras.size < 4) {
                     val o = arr.optJSONObject(i)
                     val t = o?.optString("type", "")?.trim()?.uppercase().orEmpty()
                     if (t in Decision.ALLOWED_ACTIONS && t != "NONE") {
@@ -211,17 +227,21 @@ class GeminiProvider(
                 "GEMINI_PARSED",
                 "Parsed decision: should_interrupt=$interrupt, confidence=$confidence, reason=$reason, tone=$tone, action=$action, param=$param, message=$rawMessage, extras=$extras"
             )
+            // LOOP-2: non-interrupting rounds keep silent chores (and only
+            // those) — everything else is forced to NONE so she can do
+            // background work without popping on screen.
+            val silentOk = action == "NONE" || action in Decision.SILENT_ACTIONS
             Decision(
                 tone = tone,
                 interrupt = interrupt,
                 intent = Decision.intentFor(tone, action),
-                action = if (interrupt || action == "HIDE" || action == "SET_MODE") action else "NONE",
-                actionParam = if (interrupt || action == "HIDE" || action == "SET_MODE") param.take(140) else "",
+                action = if (interrupt || action == "HIDE" || action == "SET_MODE" || (!interrupt && silentOk)) action else "NONE",
+                actionParam = if (interrupt || action == "HIDE" || action == "SET_MODE" || (!interrupt && silentOk)) param.take(140) else "",
                 message = if (interrupt) {
                     rawMessage.take(140).ifEmpty { defaultMessage(summary, true) }
                 } else "",
                 confidence = confidence,
-                extraActions = if (interrupt) extras else emptyList(),
+                extraActions = if (interrupt) extras else extras.filter { it.first in Decision.SILENT_ACTIONS },
             )
         } catch (e: Exception) {
             com.shiina.mobile.debug.AppDebugServer.log(
@@ -238,16 +258,31 @@ class GeminiProvider(
             val v = params?.optString("value", "")?.trim().orEmpty()
             if (k.isNotEmpty()) "$k=$v" else ""
         }
+        "REMEMBER" -> {
+            val k = params?.optString("key", "")?.trim().orEmpty()
+            val v = params?.optString("text", "")?.trim()
+                .ifEmpty { params?.optString("value", "")?.trim() }.orEmpty()
+            if (k.isNotEmpty()) "$k=$v" else v
+        }
         "READ_URL" -> params?.optString("url", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
         "SET_REMINDER" -> params?.optString("text", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
+        "LIST_REMINDERS" -> ""
+        "CANCEL_REMINDER" -> params?.optString("value", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("text", "")?.trim().orEmpty() }
         "SEARCH_WEB" -> params?.optString("query", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
         "COMPLETE_GOAL" -> params?.optString("value", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("title", "")?.trim().orEmpty() }
         "SET_MODE" -> params?.optString("mode", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
+        "OPEN_APP" -> params?.optString("value", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("title", "")?.trim().orEmpty() }
+        "SEARCH_APP" -> params?.optString("value", "")?.trim().orEmpty()
+        "PLAY_MUSIC", "SEARCH_MUSIC" -> params?.optString("value", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("query", "")?.trim().orEmpty() }
+        "MEDIA_CONTROL", "VOLUME_CONTROL" -> params?.optString("value", "")?.trim().orEmpty()
         else -> params?.optString("title", "")?.trim().orEmpty()
     }
 

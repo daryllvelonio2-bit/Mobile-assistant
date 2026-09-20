@@ -100,6 +100,8 @@ class MainActivity : ComponentActivity() {
                         container.usageReader,
                         container.baselineUpdater,
                         container.memoryEpisodeDao,
+                        container.database.goalDao(),
+                        container.sleepReader,
                     ) as T
             },
         )[CharacterViewModel::class.java]

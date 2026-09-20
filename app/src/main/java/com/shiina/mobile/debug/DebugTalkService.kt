@@ -110,15 +110,18 @@ class DebugTalkService : Service() {
                 }
                 val baseline = container.baselineUpdater.getEntertainmentBaseline()
                 dbg("Usage minutes: $minutes, baseline: $baseline")
+                // LOOP-1: real goals + sleep feed the debug decision too.
+                val goals = runCatching { container.database.goalDao().all() }.getOrDefault(emptyList())
+                val bedMillis = runCatching { container.sleepReader.getLatestBedMillis() }.getOrNull() ?: 0L
                 val decision = container.providerRegistry.decide(
                     DecisionSummary(
                         entertainmentMinutes = minutes,
                         entertainmentBaseline = baseline,
-                        sleepBedMillis = 0L,
+                        sleepBedMillis = bedMillis,
                         sleepBaselineMillis = 0L,
-                        goalsOpen = 0,
-                        goalsDone = 0,
-                        goalsMissed = 0,
+                        goalsOpen = goals.count { it.status == 0 },
+                        goalsDone = goals.count { it.status == 1 },
+                        goalsMissed = goals.count { it.status == 2 },
                     ),
                     source = "debug",
                 )
@@ -179,6 +182,9 @@ class DebugTalkService : Service() {
         val container = (application as CompanionApp).container
         scope.launch {
             runCatching { container.memoryOutcomes.onTalkReply() }
+            // Dynamic Mood Balancing: user speech nudges the emotional vector
+            // (praise/complaint keywords detected inside the engine).
+            runCatching { container.moodEngine.applyUserText(text) }
         }
         container.userActivityTracker.recordActivity()
 
@@ -218,8 +224,14 @@ class DebugTalkService : Service() {
             }.getOrNull() ?: 0L
             val hoursInactive = container.userActivityTracker.getHoursSinceLastActive(fallback = lastUserTurn)
             if (hoursInactive >= 10.0) {
-                lastTone = "pouty"
-                dbg("User was inactive for ${"%.1f".format(hoursInactive)}h — setting mood to POUTY")
+                runCatching {
+                    container.moodEngine.applyEvent(
+                        com.shiina.mobile.character.MoodEngine.Event.NEGLECT,
+                        "neglected ${hoursInactive.toInt()}h",
+                    )
+                }
+                lastTone = runCatching { container.moodEngine.currentMood() }.getOrDefault("pouty")
+                dbg("User was inactive for ${"%.1f".format(hoursInactive)}h — mood now $lastTone")
             }
 
             var extra = ""
@@ -347,43 +359,6 @@ class DebugTalkService : Service() {
             t.contains("current music") || t.contains("song is playing") ||
             t.contains("music is playing") || t.contains("anong kanta") ||
             t.contains("anong tugtog") || t.contains("anong pinapatugtog")
-    }
-
-    /** Multi-step goals (e.g. playing an anime, watching a video, playing music) require verified completion before DONE. */
-    private fun isMultiStepGoal(userText: String): Boolean {
-        val t = userText.lowercase().trim()
-        if (isStopOrCancelCommand(t)) return false
-        val playVerbs = listOf("play", "watch", "stream", "listen", "put on", "start", "panoorin", "patugtugin", "pakinggan", "manood")
-        return playVerbs.any { verb ->
-            Regex("""\b$verb\b""", RegexOption.IGNORE_CASE).containsMatchIn(t)
-        }
-    }
-
-    private fun isStopOrCancelCommand(text: String): Boolean {
-        val t = text.lowercase().trim()
-        return t in setOf("stop", "cancel", "pause", "nevermind", "wag na", "hinto", "tigil", "exit", "quit") ||
-            t.startsWith("stop ") || t.startsWith("cancel ") || t.startsWith("pause ") || t.startsWith("wag na ")
-    }
-
-    private fun isGoalAchieved(userText: String, steps: List<String>, screenElements: String): Boolean {
-        if (!isMultiStepGoal(userText)) return true
-
-        // 1. Music playback verified via PLAY_MUSIC
-        if (steps.any { it.startsWith("PLAY_MUSIC:") && (it.contains("playing") || it.contains("opened_in_browser")) }) {
-            return true
-        }
-
-        // 2. Video player UI active on screen
-        val screenLower = screenElements.lowercase()
-        val hasPlayerUi = screenLower.contains("pause") || screenLower.contains("player") ||
-            screenLower.contains("seek") || screenLower.contains("rewind") ||
-            screenLower.contains("forward") || screenLower.contains("buffering")
-
-        val tapCount = steps.count { it.startsWith("TAP_SCREEN:") || it.startsWith("INPUT_TEXT:") }
-        val hasOpenedApp = steps.any { it.startsWith("OPEN_APP:") }
-
-        // If app was opened, require verified player UI or sufficient interaction depth (at least 2 taps)
-        return hasOpenedApp && (hasPlayerUi || tapCount >= 2)
     }
 
     /**
@@ -605,6 +580,8 @@ class DebugTalkService : Service() {
         val senses = runCatching { container.deviceSenses.snapshot() }.getOrDefault("{}")
         val timeInfo = P.timeLine(this)
         val learnedMemory = runCatching { container.learnedMemoryManager.readMemory() }.getOrDefault("")
+        // Suspend call hoisted out of the non-suspend buildBasePrompt closure.
+        val moodBlock = runCatching { container.moodEngine.promptBlock() }.getOrNull().orEmpty()
 
         fun buildBasePrompt(includeTools: Boolean = false): String = buildString {
             appendLine("# Persona & Instructions")
@@ -620,9 +597,12 @@ class DebugTalkService : Service() {
                 appendLine()
             }
 
+            val screenRes = container.screenMetrics.toString()
             appendLine("# Live Context & Device Senses")
             appendLine("- $timeInfo")
             appendLine("- Senses: $senses")
+            appendLine("- Screen Resolution: $screenRes (normalized 0..1000: x: 0..1000, y: 0..1000)")
+            if (moodBlock.isNotBlank()) appendLine("- $moodBlock")
             if (hoursInactive >= 10.0 && !isSystemTrigger) {
                 appendLine("- User Absence Alert: The user has not opened the app or spoken to you for ${hoursInactive.toInt()} hours! You are in a POUTY bad mood because they neglected you. Sulk, pout, or complain about being abandoned before warming back up.")
             }
@@ -667,23 +647,31 @@ class DebugTalkService : Service() {
             return postText(fastPrompt, attachScreenshot)
         }
 
+        // Initial screenshot capture if user explicitly asked about the screen
+        var shouldAttachShot = attachScreenshot
+        if (!shouldAttachShot && isScreenshotAsk(userText)) {
+            val f = runCatching { container.screenshotTaker.capture("talk") }.getOrNull()
+            if (f != null) shouldAttachShot = true
+        }
+
         var prompt = buildBasePrompt(includeTools = true)
         val steps = mutableListOf<String>()
-        var lastSig = ""
         var answer = ""
         var calls = 0
-        var attachShot = false
-        val MAX_AGENT_STEPS = 15
+        val MAX_AGENT_STEPS = 25
 
         while (calls < MAX_AGENT_STEPS) {
-            val raw = postText(prompt, attachShot, structuredSchema = true)
-            attachShot = false
+            val raw = postText(prompt, attachShot = shouldAttachShot, structuredSchema = true)
+            shouldAttachShot = false
             val step = parseAgentStep(raw)
 
             if (step != null) {
                 if (step.mood.isNotBlank()) {
-                    lastTone = step.mood
-                    AppDebugServer.log("TALK_MOOD", "Shiina dynamically set mood to: ${step.mood}")
+                    // Dynamic Mood Balancing: the model's chosen mood nudges the
+                    // persistent vector 35% instead of overwriting her state.
+                    runCatching { container.moodEngine.applyModelExpression(step.mood) }
+                    lastTone = runCatching { container.moodEngine.currentMood() }.getOrDefault(step.mood)
+                    AppDebugServer.log("TALK_MOOD", "Model expressed ${step.mood} -> mood now $lastTone")
                 }
                 AppDebugServer.log(
                     "GEMINI_TALK_PARSED",
@@ -703,62 +691,54 @@ class DebugTalkService : Service() {
                 (step.status.equals("DONE", ignoreCase = true) || !step.status.equals("CONTINUE", ignoreCase = true))
 
             if (isDone) {
-                // Intercept premature completion when user has an active multi-step goal that isn't achieved
-                val screenElements = container.deviceActionController.getScreenElementsSummary()
-                val isPremature = calls < (MAX_AGENT_STEPS - 2) && !isGoalAchieved(userText, steps, screenElements)
-                if (isPremature) {
-                    AppDebugServer.log("TALK_AGENT", "Premature completion rejected for goal: '$userText'. Continuing execution loop.")
-                    calls++
-                    attachShot = true
-                    prompt = buildString {
-                        append(buildBasePrompt(includeTools = true))
-                        appendLine()
-                        appendLine()
-                        appendLine("# Agent Execution State")
-                        appendLine("- Current step: #${calls} of max $MAX_AGENT_STEPS")
-                        appendLine("- Primary Goal: \"$userText\"")
-                        appendLine("- Goal Status: IN PROGRESS (Playback not verified yet. Do NOT set status 'DONE' until content is playing)")
-                        appendLine("- Steps taken so far: ${steps.joinToString("; ").ifEmpty { "none" }}")
-                        if (step.thought.isNotBlank()) {
-                            appendLine("- Your previous thought: ${step.thought}")
-                        }
-                        if (screenElements.isNotBlank() && !screenElements.startsWith("Accessibility service not active") && !screenElements.startsWith("No interactive elements")) {
+                var finalMsg = step.message.trim()
+                if (finalMsg.isBlank() || finalMsg.startsWith("{") || finalMsg.startsWith("```") || finalMsg.contains("\"thought\":")) {
+                    val extracted = parseAgentStep(raw)?.message?.trim().orEmpty()
+                    if (extracted.isNotBlank() && !extracted.startsWith("{") && !extracted.contains("\"thought\":")) {
+                        finalMsg = extracted
+                    } else {
+                        // Guaranteed to talk at the final step!
+                        AppDebugServer.log("TALK_AGENT", "Final step had no conversational message (or was JSON); synthesizing natural speech...")
+                        val finalPrompt = buildString {
+                            append(buildBasePrompt(includeTools = false))
                             appendLine()
-                            appendLine("# Screen Grounding Hierarchy")
-                            appendLine(screenElements)
+                            appendLine()
+                            if (steps.isNotEmpty()) {
+                                appendLine("# Agent Execution Summary")
+                                appendLine("- Steps taken: ${steps.joinToString("; ")}")
+                                appendLine()
+                            }
+                            appendLine("The task is completed. Answer the user now in an authentic, natural conversational tone as Shiina (1-2 sentences, plain text ONLY, absolutely NO JSON).")
                         }
-                        appendLine()
-                        appendLine("Instructions: PREMATURE COMPLETION REJECTED. Your primary goal is to \"$userText\". You stopped after merely opening the app or navigating—the anime/video is NOT playing yet! Do NOT stop and do NOT ask the user to do it. Inspect the attached screenshot and # Screen Grounding Hierarchy: select an anime card or title using TAP_SCREEN (with element_id or text), or search using INPUT_TEXT, then tap Play or Episode 1. Keep status 'CONTINUE' until playback is verified on screen.")
+                        finalMsg = postText(finalPrompt, attachShot = false).trim()
                     }
-                    continue
                 }
-
-                answer = step.message.ifBlank {
-                    if (raw.startsWith("{") && raw.contains("\"candidates\"")) "" else raw
-                }.trim().take(512)
+                answer = finalMsg.trim().take(512)
                 AppDebugServer.log("TALK_AGENT", "Agent invoked completion (DONE) at step #${calls + 1}")
                 break
             }
 
-            // Intermediate step: push progress to overlay, but DO NOT overwrite answer
+            // Intermediate step: if message provided, push it; otherwise execute silently
             if (step.message.isNotBlank()) {
-                pushTextToOverlay(step.message.trim())
-                AppDebugServer.log("TALK_INTERACTION", "Agent progress status: ${step.message.trim()}")
+                val progressMsg = step.message.trim()
+                pushTextToOverlay(progressMsg)
+                AppDebugServer.log("TALK_INTERACTION", "Agent progress status: $progressMsg")
+            } else {
+                AppDebugServer.log("TALK_INTERACTION", "Agent executing step #${calls + 1} silently (${step.tool})")
             }
 
-            // Repetition detection
-            val sig = step.tool + "|" + (step.toolset + step.query + step.url + step.key + step.mode + step.title + step.action + step.app + step.player + step.filter + step.level + step.x + step.y + step.text).take(120)
-            if (sig == lastSig && step.tool != "NONE") {
-                AppDebugServer.log("TALK_LOOP", "Repetition detected for $sig — breaking loop")
-                break
-            }
-            lastSig = sig
             calls++
 
             val result = runTool(step)
-            if (result.second || step.tool in setOf("OPEN_APP", "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "TAKE_SCREENSHOT", "INSPECT_SCREEN")) {
-                delay(700)
-                attachShot = true
+            // Wait for UI animation/transition: allow extra settle time for app launches and screen taps
+            val waitMs = when (step.tool) {
+                "OPEN_APP" -> 2000L
+                "TAP_SCREEN" -> 1500L
+                else -> 1000L
+            }
+            delay(waitMs)
+            if (result.second) {
+                shouldAttachShot = true
             }
             runCatching { container.toolTracker.record(step.tool.lowercase(), result.first.isNotEmpty()) }
             steps += "${step.tool}: ${result.first.take(150).ifEmpty { "empty" }}"
@@ -767,56 +747,47 @@ class DebugTalkService : Service() {
             )
             val feed = result.first.ifEmpty { "no results" }
 
-            val screenElements = if (attachShot || step.tool in setOf("OPEN_APP", "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "TAKE_SCREENSHOT", "INSPECT_SCREEN")) {
-                container.deviceActionController.getScreenElementsSummary()
-            } else ""
-
-            val nextInstruction = when (step.tool) {
-                "OPEN_APP" -> "The app '${step.app.ifEmpty { step.query }}' has been opened. Updated screen image and interactive elements are attached. Ground your next action using 'element_id' (e.g. {\"element_id\": 1}), 'text' (e.g. {\"text\": \"Search\"}), or normalized coordinates 'x', 'y' (0..1000 scale). Execute the next step with status 'CONTINUE'."
-                "TAKE_SCREENSHOT", "INSPECT_SCREEN" -> "Screen state and interactive elements are attached. Ground your next action using 'element_id' from the list, 'text', or 'x', 'y' coordinates. Call 'TAP_SCREEN', 'INPUT_TEXT', or 'SWIPE_SCREEN' with status 'CONTINUE'."
-                "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT" -> "Screen interaction completed with observation: $feed. Updated screen image and interactive elements are attached. If more actions are needed (e.g. typing query, clicking play/card), invoke the tool with status 'CONTINUE'. If your task is complete, set tool to 'NONE' and status to 'DONE'."
-                "PRESS_KEY" -> "Key action '${step.action}' executed. If your task is complete, set tool to 'NONE' and status to 'DONE'."
-                else -> "The action '${step.tool}' completed with observation: $feed. Analyze the observation carefully. If you need to perform the next step (e.g. tapping screen elements, entering text, or adjusting state), invoke that tool with status 'CONTINUE'. If your task is complete, set tool to 'NONE' and status to 'DONE' to deliver your final conversational response in 'message' strictly grounded in what actually happened."
-            }
-
             prompt = buildString {
                 append(buildBasePrompt(includeTools = true))
                 appendLine()
                 appendLine()
                 appendLine("# Agent Execution State")
-                appendLine("- Current step: #${calls} of max $MAX_AGENT_STEPS")
+                appendLine("- Current step: #${calls}")
                 appendLine("- Primary Goal: \"$userText\"")
-                if (isMultiStepGoal(userText)) {
-                    val achieved = isGoalAchieved(userText, steps, screenElements)
-                    appendLine("- Goal Status: ${if (achieved) "PLAYBACK VERIFIED" else "IN PROGRESS (Content not playing yet — keep status 'CONTINUE' until playing)"}")
-                }
                 appendLine("- Steps taken so far: ${steps.joinToString("; ")}")
                 if (step.thought.isNotBlank()) {
                     appendLine("- Your previous thought: ${step.thought}")
                 }
                 appendLine("- Observation from ${step.tool}: $feed")
-                if (screenElements.isNotBlank() && !screenElements.startsWith("Accessibility service not active") && !screenElements.startsWith("No interactive elements")) {
-                    appendLine()
-                    appendLine("# Screen Grounding Hierarchy")
-                    appendLine(screenElements)
+                if (step.tool == "TAKE_SCREENSHOT" && result.second) {
+                    appendLine("- Visual Verification: The screenshot you requested is attached as an image. Inspect the screen carefully to verify if \"$userText\" has been completed.")
                 }
-                appendLine()
-                appendLine("Instructions: $nextInstruction")
             }
         }
-        if (answer.isEmpty() || (answer.startsWith("{") && answer.contains("\"candidates\""))) {
-            val finalPrompt = buildString {
-                append(buildBasePrompt(includeTools = false))
-                appendLine()
-                appendLine()
-                appendLine("# Agent Execution Summary")
-                appendLine("- Steps taken: ${steps.joinToString("; ").ifEmpty { "none" }}")
-                appendLine()
-                appendLine("Answer now in a warm, friendly, and natural conversational tone (no JSON, no meta explanations).")
+        withContext(Dispatchers.Main) { refresh() }
+        if (answer.isBlank() || answer.startsWith("{") || answer.startsWith("```") || answer.contains("\"thought\":") || answer.contains("\"candidates\"")) {
+            val extracted = parseAgentStep(answer)?.message?.trim().orEmpty()
+            if (extracted.isNotBlank() && !extracted.startsWith("{") && !extracted.contains("\"thought\":")) {
+                answer = extracted
+            } else {
+                val finalPrompt = buildString {
+                    append(buildBasePrompt(includeTools = false))
+                    appendLine()
+                    appendLine()
+                    if (steps.isNotEmpty()) {
+                        appendLine("# Agent Execution Summary")
+                        appendLine("- Steps taken: ${steps.joinToString("; ").ifEmpty { "none" }}")
+                        appendLine()
+                    }
+                    appendLine("Answer now in a warm, friendly, and natural conversational tone as Shiina (plain text ONLY, 1-2 sentences, absolutely no JSON, no meta explanations).")
+                }
+                answer = postText(finalPrompt, attachShot = false).trim()
+                if (answer.startsWith("{") || answer.startsWith("```") || answer.contains("\"thought\":")) {
+                    answer = parseAgentStep(answer)?.message?.trim().orEmpty()
+                }
             }
-            answer = postText(finalPrompt, attachShot)
         }
-        if (answer.isEmpty() || (answer.startsWith("{") && answer.contains("\"candidates\""))) {
+        if (answer.isBlank() || answer.startsWith("{") || answer.startsWith("```") || answer.contains("\"thought\":")) {
             answer = "Hmm, I lost my train of thought for a second. What's on your mind?"
         }
         return answer.trim().take(512).ifEmpty { "(empty reply)" }
@@ -856,7 +827,8 @@ class DebugTalkService : Service() {
                 runCatching { container.pageReader.read(step.url) }.getOrDefault("") to false
             "TAKE_SCREENSHOT" -> {
                 val f = runCatching { container.screenshotTaker.capture("talk") }.getOrNull()
-                if (f != null) "screenshot captured" to true else "" to false
+                if (f != null) "Screenshot captured successfully. The screen image is attached for your inspection." to true
+                else "Screenshot capture failed (permission not granted or display busy)." to false
             }
             "CHECK_GOALS" ->
                 runCatching { container.actionExecutor.goalReport() }.getOrDefault("no goals") to false
@@ -982,8 +954,10 @@ class DebugTalkService : Service() {
             "Talk prompt:\n$prompt" + if (attachShot) " [screenshot attached]" else "",
         )
         val container = (application as CompanionApp).container
-        val key = container.keyStore.getKeys("gemini").firstOrNull()
-            ?: throw IllegalStateException("no gemini keys")
+        val keyPool = container.geminiKeyPool
+        val totalKeys = container.keyStore.getKeys("gemini").size.coerceAtLeast(1)
+        val maxAttempts = (totalKeys * 2).coerceAtMost(4)
+
         val parts = org.json.JSONArray().put(
             JSONObject().put("text", prompt),
         )
@@ -1051,15 +1025,19 @@ class DebugTalkService : Service() {
                         .put("status", JSONObject().put("type", "STRING").put("enum", statusEnum))
                         .put("tool", JSONObject().put("type", "STRING").put("enum", toolEnum))
                         .put("tool_args", toolArgsSchema)
-                        .put("message", JSONObject().put("type", "STRING")),
+                        .put(
+                            "message",
+                            JSONObject()
+                                .put("type", "STRING")
+                                .put("description", "Natural conversational response spoken to the user. MANDATORY when status is DONE. Only omit or leave empty \"\" when executing intermediate tools silently."),
+                        ),
                 )
                 .put(
                     "required",
                     org.json.JSONArray()
                         .put("thought")
                         .put("status")
-                        .put("tool")
-                        .put("message"),
+                        .put("tool"),
                 )
 
             requestBody.put(
@@ -1070,20 +1048,46 @@ class DebugTalkService : Service() {
             )
         }
 
-        for (attempt in 1..2) {
+        val configuredModel = runCatching { container.settingsRepository.getGeminiModel() }
+            .getOrDefault("gemini-3.5-flash-lite")
+        val alternateModel = if (configuredModel == "gemini-3.5-flash-lite") {
+            "gemini-3.1-flash-lite"
+        } else {
+            "gemini-3.5-flash-lite"
+        }
+
+        var currentModel = configuredModel
+        var fallbackTriggered = false
+
+        for (attempt in 1..maxAttempts) {
+            val key = keyPool.next()
+                ?: container.keyStore.getKeys("gemini").firstOrNull()
+                ?: throw IllegalStateException("no gemini keys configured")
+
             val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$key")
+                .url("https://generativelanguage.googleapis.com/v1beta/models/$currentModel:generateContent?key=$key")
                 .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
                 .build()
             val raw = runCatching {
                 http.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw IllegalStateException("gemini ${response.code}")
+                    if (!response.isSuccessful) {
+                        if (response.code == 429) {
+                            keyPool.reportFailure(key, 60_000L)
+                            AppDebugServer.log("WARN", "Gemini key ...${key.takeLast(4)} hit 429 rate limit on $currentModel, rotating key in pool")
+                            if (!fallbackTriggered) {
+                                currentModel = alternateModel
+                                fallbackTriggered = true
+                                AppDebugServer.log("WARN", "Failing over to alternate model: $currentModel (separate quota pool)")
+                            }
+                        }
+                        throw IllegalStateException("gemini ${response.code}")
+                    }
                     response.body?.string().orEmpty()
                 }
             }.getOrDefault("")
 
             if (raw.isNotBlank()) {
-                AppDebugServer.log("GEMINI_TALK_RESPONSE", "Talk raw response (attempt $attempt):\n$raw")
+                AppDebugServer.log("GEMINI_TALK_RESPONSE", "Talk raw response (attempt $attempt, model $currentModel, key ...${key.takeLast(4)}):\n$raw")
                 val json = runCatching { JSONObject(raw) }.getOrNull()
                 val candidate = json?.optJSONArray("candidates")?.optJSONObject(0)
                 val finishReason = candidate?.optString("finishReason", "")
@@ -1096,9 +1100,9 @@ class DebugTalkService : Service() {
                 if (!text.isNullOrBlank()) {
                     return text.take(1024)
                 }
-                AppDebugServer.log("WARN", "Gemini returned empty text or finishReason=$finishReason on attempt $attempt")
+                AppDebugServer.log("WARN", "Gemini returned empty text or finishReason=$finishReason on attempt $attempt ($currentModel)")
             }
-            if (attempt < 2) kotlinx.coroutines.delay(500)
+            if (attempt < maxAttempts) kotlinx.coroutines.delay(300)
         }
 
         return "{\"thought\": \"Response generation failed\", \"status\": \"DONE\", \"tool\": \"NONE\", \"message\": \"Hmm, I lost my train of thought for a second. What's on your mind?\"}"

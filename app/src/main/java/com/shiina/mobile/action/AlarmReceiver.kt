@@ -50,15 +50,18 @@ class AlarmReceiver : BroadcastReceiver() {
         val c = container(context)
         val minutes = c.usageReader.getTodayEntertainmentMinutes()
         val baseline = c.baselineUpdater.getEntertainmentBaseline()
+        // LOOP-1: real goal counts + last sleep session instead of zeros.
+        val goals = runCatching { c.database.goalDao().all() }.getOrDefault(emptyList())
+        val bedMillis = runCatching { c.sleepReader.getLatestBedMillis() }.getOrNull() ?: 0L
         val decision = c.providerRegistry.decide(
             DecisionSummary(
                 entertainmentMinutes = minutes,
                 entertainmentBaseline = baseline,
-                sleepBedMillis = 0L,
+                sleepBedMillis = bedMillis,
                 sleepBaselineMillis = 0L,
-                goalsOpen = 0,
-                goalsDone = 0,
-                goalsMissed = 0,
+                goalsOpen = goals.count { it.status == 0 },
+                goalsDone = goals.count { it.status == 1 },
+                goalsMissed = goals.count { it.status == 2 },
             ),
             source = "alarm",
         )

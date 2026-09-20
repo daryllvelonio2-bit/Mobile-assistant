@@ -11,6 +11,8 @@ import com.shiina.mobile.data.db.MIGRATION_4_5
 import com.shiina.mobile.data.db.MIGRATION_5_6
 import com.shiina.mobile.data.db.MIGRATION_6_7
 import com.shiina.mobile.data.db.MIGRATION_7_8
+import com.shiina.mobile.data.db.MIGRATION_8_9
+import com.shiina.mobile.data.db.MIGRATION_9_10
 import com.shiina.mobile.data.security.KeyStoreKeys
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.action.ActionExecutor
@@ -41,7 +43,8 @@ class AppContainer(context: Context) {
         Room.databaseBuilder(appContext, AppDatabase::class.java, "companion.db")
             .addMigrations(
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8,
+                MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                MIGRATION_9_10,
             )
             .build()
     }
@@ -54,7 +57,11 @@ class AppContainer(context: Context) {
         com.shiina.mobile.observation.MusicTracker(appContext)
     }
 
-    val deviceSenses: DeviceSenses by lazy { DeviceSenses(appContext, musicTracker) }
+    val screenMetrics: com.shiina.mobile.observation.ScreenMetrics by lazy {
+        com.shiina.mobile.observation.ScreenMetrics(appContext)
+    }
+
+    val deviceSenses: DeviceSenses by lazy { DeviceSenses(appContext, musicTracker, screenMetrics) }
 
     val pageReader: PageReader by lazy { PageReader() }
 
@@ -70,7 +77,13 @@ class AppContainer(context: Context) {
 
     val memorySummaryDao by lazy { database.memorySummaryDao() }
 
-    val memoryOutcomes: MemoryOutcomes by lazy { MemoryOutcomes(memoryEpisodeDao) }
+    val moodEngine: com.shiina.mobile.character.MoodEngine by lazy {
+        com.shiina.mobile.character.MoodEngine(database.moodStateDao())
+    }
+
+    val memoryOutcomes: MemoryOutcomes by lazy {
+        MemoryOutcomes(memoryEpisodeDao, moodEngine)
+    }
 
     val memoryStore: MemoryStore by lazy {
         MemoryStore(memoryFactDao, memoryEpisodeDao, chatTurnDao, memorySummaryDao)
@@ -87,7 +100,7 @@ class AppContainer(context: Context) {
     }
 
     val memoryContext: MemoryContext by lazy {
-        MemoryContext(memoryEpisodeDao, memoryFactDao, database.baselineDao(), memorySummaryDao)
+        MemoryContext(memoryEpisodeDao, memoryFactDao, database.baselineDao(), memorySummaryDao, toolStatDao)
     }
 
     val memoryCompactor: MemoryCompactor by lazy {
@@ -115,7 +128,12 @@ class AppContainer(context: Context) {
             memoryCompactor,
             toolStatDao,
             memoryConsolidator,
+            activityTracker = userActivityTracker,
         )
+    }
+
+    val sleepReader: com.shiina.mobile.observation.SleepReader by lazy {
+        com.shiina.mobile.observation.SleepReader(appContext)
     }
 
     val settingsRepository: SettingsRepository by lazy {
@@ -128,13 +146,18 @@ class AppContainer(context: Context) {
 
     private val httpClient: OkHttpClient by lazy { OkHttpClient() }
 
+    val geminiKeyPool: RoundRobinKeyPool by lazy {
+        RoundRobinKeyPool { keyStore.getKeys("gemini") }
+    }
+
     val providerRegistry: ProviderRegistry by lazy {
-        val geminiPool = RoundRobinKeyPool { keyStore.getKeys("gemini") }
         ProviderRegistry(
             listOf(
                 GeminiProvider(
-                    appContext, geminiPool, httpClient, memoryEpisodeDao,
+                    appContext, geminiKeyPool, httpClient, memoryEpisodeDao,
                     goalDao = database.goalDao(),
+                    moodEngine = moodEngine,
+                    settingsRepository = settingsRepository,
                 ),
             ),
             memoryEpisodeDao,
@@ -143,6 +166,7 @@ class AppContainer(context: Context) {
             deviceSenses,
             settingsRepository,
             database.baselineDao(),
+            moodEngine,
         )
     }
 
@@ -153,7 +177,7 @@ class AppContainer(context: Context) {
     }
 
     val deviceActionController: com.shiina.mobile.action.DeviceActionController by lazy {
-        com.shiina.mobile.action.DeviceActionController(appContext)
+        com.shiina.mobile.action.DeviceActionController(appContext, screenMetrics)
     }
 
     val actionExecutor: ActionExecutor by lazy {
@@ -166,7 +190,7 @@ class AppContainer(context: Context) {
     }
 
     val screenshotTaker: ScreenshotTaker by lazy {
-        ScreenshotTaker(appContext)
+        ScreenshotTaker(appContext, screenMetrics)
     }
 
     val webSearch: WebSearch by lazy { WebSearch() }

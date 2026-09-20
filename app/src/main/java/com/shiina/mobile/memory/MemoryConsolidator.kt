@@ -57,7 +57,9 @@ class MemoryConsolidator(
                 return@withLock 0
             }
 
-            val key = keyStore.getKeys("gemini").firstOrNull()
+            val container = (context.applicationContext as? com.shiina.mobile.CompanionApp)?.container
+            val keyPool = container?.geminiKeyPool
+            val key = keyPool?.next() ?: keyStore.getKeys("gemini").firstOrNull()
             if (key.isNullOrBlank()) {
                 AppDebugServer.log("MEMORY_CONSOLIDATION", "No Gemini key available for consolidation")
                 return@withLock 0
@@ -93,8 +95,13 @@ class MemoryConsolidator(
                 appendLine("]")
             }
 
-            val rawResponse = runCatching { callGemini(prompt, key) }.getOrElse { e ->
-                AppDebugServer.log("ERROR", "Memory consolidation API call failed: ${e.message}")
+            val targetModel = runCatching { container?.settingsRepository?.getGeminiModel() }.getOrNull() ?: model
+            val rawResponse = runCatching { callGemini(prompt, key, keyPool, targetModel) }.getOrElse { e ->
+                if (e.message?.contains("429") == true) {
+                    AppDebugServer.log("WARN", "Memory consolidation skipped: Gemini API rate-limited (429)")
+                } else {
+                    AppDebugServer.log("ERROR", "Memory consolidation API call failed: ${e.message}")
+                }
                 return@withLock 0
             }
 
@@ -109,7 +116,7 @@ class MemoryConsolidator(
 
             val maxTimestamp = newTurns.maxOf { it.timestampMillis }
             prefs.edit().putLong(KEY_LAST_EXTRACTED_TIMESTAMP, maxTimestamp).apply()
-            AppDebugServer.log("MEMORY_CONSOLIDATION", "Consolidation complete: $count new facts extracted from ${newTurns.size} turns")
+            AppDebugServer.log("MEMORY_CONSOLIDATION", "Consolidation complete: $count new facts extracted from ${newTurns.size} turns (model: $targetModel)")
             count
         }
     }
@@ -130,20 +137,27 @@ class MemoryConsolidator(
 
         return runCatching {
             val array = JSONArray(text)
-            val results = mutableListOf<Pair<String, String>>()
+            val result = mutableListOf<Pair<String, String>>()
             for (i in 0 until array.length()) {
                 val obj = array.optJSONObject(i) ?: continue
-                val k = obj.optString("key", "").trim().lowercase().replace(" ", "_")
+                val k = obj.optString("key", "").trim().lowercase()
+                    .replace(" ", "_")
+                    .replace(Regex("[^a-z0-9_]"), "")
                 val v = obj.optString("value", "").trim()
-                if (k.isNotBlank() && v.isNotBlank()) {
-                    results.add(k to v)
+                if (k.isNotBlank() && v.isNotBlank() && k.length <= 64 && v.length <= 500) {
+                    result.add(k to v)
                 }
             }
-            results
+            result
         }.getOrDefault(emptyList())
     }
 
-    private fun callGemini(prompt: String, key: String): String {
+    private fun callGemini(
+        prompt: String,
+        key: String,
+        keyPool: com.shiina.mobile.decision.RoundRobinKeyPool? = null,
+        activeModel: String = model,
+    ): String {
         val body = JSONObject()
             .put(
                 "contents",
@@ -158,12 +172,15 @@ class MemoryConsolidator(
             .toRequestBody("application/json".toMediaType())
 
         val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key")
+            .url("https://generativelanguage.googleapis.com/v1beta/models/$activeModel:generateContent?key=$key")
             .post(body)
             .build()
 
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
+                if (response.code == 429) {
+                    keyPool?.reportFailure(key, 60_000L)
+                }
                 throw IllegalStateException("gemini error ${response.code}")
             }
             val respStr = response.body?.string().orEmpty()

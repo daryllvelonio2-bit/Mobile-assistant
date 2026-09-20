@@ -36,8 +36,8 @@ Mobile-assistant/
                 ├── debug/          # AppDebugServer, JSON API dashboard + DebugTalkService notification panel
                 │                   #   + AdbTalkReceiver (PC chat over adb wifi via send.py)
                 ├── memory/         # MemoryStore (facts CRUD/contradict/forget), MemoryCompactor
-                ├── observation/    # Foreground observation service + MusicTracker (MediaSession, broadcasts) +
-                │                   #   MusicNotificationListener + MemoryOutcomes (episode signals)
+                ├── observation/    # Foreground observation service + ScreenMetrics (resolution learner) +
+                │                   #   MusicTracker (MediaSession, broadcasts) + MusicNotificationListener + MemoryOutcomes (episode signals)
                 ├── theme/          # Material 3 Theme, Colors, and Typography
                 ├── ui/
                 │   ├── character/  # Character ViewModel ("remembers N days") and M3 control panel

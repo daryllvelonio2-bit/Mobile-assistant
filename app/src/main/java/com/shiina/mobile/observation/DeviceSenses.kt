@@ -27,6 +27,7 @@ import org.json.JSONObject
 class DeviceSenses(
     private val context: Context,
     private val musicTracker: MusicTracker? = null,
+    private val screenMetrics: ScreenMetrics? = null,
 ) {
 
     @Volatile private var cached: String = ""
@@ -41,6 +42,7 @@ class DeviceSenses(
             val batt = battery()
             val track = musicTracker?.getExactMusic()
             val isPlaying = track?.isPlaying ?: musicPlaying()
+            val metrics = screenMetrics ?: ScreenMetrics(context)
             val json = JSONObject()
                 .put("time", fmt.format(Date()))
                 .put("hour_bucket", bucket(hour))
@@ -48,6 +50,7 @@ class DeviceSenses(
                 .put("low_battery", batt in 0..15)
                 .put("charging", charging())
                 .put("screen", if (screenOn()) "on" else "off")
+                .put("screen_resolution", metrics.toString())
                 .put("ringer", ringer())
                 .put("music_playing", isPlaying)
                 .put("foreground_app", foregroundApp() ?: "unknown (no usage access)")

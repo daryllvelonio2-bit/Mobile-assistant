@@ -1,5 +1,6 @@
 package com.shiina.mobile.observation
 
+import com.shiina.mobile.character.MoodEngine
 import com.shiina.mobile.data.db.MemoryEpisodeDao
 import com.shiina.mobile.debug.AppDebugServer
 
@@ -12,8 +13,14 @@ import com.shiina.mobile.debug.AppDebugServer
  * - acted: the recommended action was executed.
  * Also owns the real cooldown gate: recent dismissals suppress the next
  * interrupt instead of the prompt's honor-system cooldown.
+ * Dynamic Mood Balancing step 6: each outcome also nudges the persistent
+ * valence-arousal state, so how the user treats her interrupts changes how
+ * she feels — not just what the logs say.
  */
-class MemoryOutcomes(private val dao: MemoryEpisodeDao) {
+class MemoryOutcomes(
+    private val dao: MemoryEpisodeDao,
+    private val moodEngine: MoodEngine? = null,
+) {
 
     /** Overlay rendered for the latest interrupt decision. */
     suspend fun markShown() {
@@ -30,6 +37,7 @@ class MemoryOutcomes(private val dao: MemoryEpisodeDao) {
             if (System.currentTimeMillis() - ep.timestampMillis <= DISMISS_WINDOW_MS) {
                 dao.markDismissed(ep.id)
                 AppDebugServer.log("MEMORY", "Episode ${ep.id} dismissed (hidden within 60s)")
+                runCatching { moodEngine?.applyEvent(MoodEngine.Event.DISMISSED, "interrupt dismissed") }
             }
         }.onFailure { log(it) }
     }
@@ -41,6 +49,7 @@ class MemoryOutcomes(private val dao: MemoryEpisodeDao) {
             if (System.currentTimeMillis() - ep.timestampMillis <= TALK_WINDOW_MS) {
                 dao.markTalkedBack(ep.id)
                 AppDebugServer.log("MEMORY", "Episode ${ep.id} talkedBack")
+                runCatching { moodEngine?.applyEvent(MoodEngine.Event.TALKED_BACK, "user talked back") }
             }
         }.onFailure { log(it) }
     }
@@ -52,6 +61,7 @@ class MemoryOutcomes(private val dao: MemoryEpisodeDao) {
             if (ep.action != "NONE") {
                 dao.markActed(ep.id)
                 AppDebugServer.log("MEMORY", "Episode ${ep.id} acted (${ep.action})")
+                runCatching { moodEngine?.applyEvent(MoodEngine.Event.ACTED, "user acted on nudge") }
             }
         }.onFailure { log(it) }
     }

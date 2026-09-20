@@ -3,6 +3,7 @@ package com.shiina.mobile.action
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.os.Build
 import android.os.Bundle
@@ -142,40 +143,59 @@ class ShiinaAccessibilityService : AccessibilityService() {
 
     /**
      * Clicks a cached element by its ID.
-     * Tries text click first, then falls back to physical tap gesture at element center.
+     * Prioritizes physical tap gesture at element center coordinates for maximum reliability
+     * across custom views, cards, and video players. Falls back to text click if gesture fails.
      */
     suspend fun clickElementById(id: Int): Boolean {
         val elem = cachedElements[id] ?: return false
+        val tapped = tap(elem.centerX.toFloat(), elem.centerY.toFloat())
+        if (tapped) return true
         if (elem.text.isNotBlank()) {
-            if (clickNodeByText(elem.text)) return true
+            return clickNodeByText(elem.text)
         }
-        return tap(elem.centerX.toFloat(), elem.centerY.toFloat())
+        return false
     }
 
     /**
      * Dispatches a tap gesture at the specified screen coordinates (x, y).
+     * Automatically retries once after a short delay (150ms) if the gesture is cancelled
+     * due to a momentary window animation or activity transition.
      */
-    suspend fun tap(x: Float, y: Float): Boolean = suspendCancellableCoroutine { cont ->
+    suspend fun tap(x: Float, y: Float, retryOnCancel: Boolean = true): Boolean {
+        val success = performTapGesture(x, y)
+        if (!success && retryOnCancel) {
+            com.shiina.mobile.debug.AppDebugServer.log("GESTURE", "Tap was cancelled or failed at ($x, $y), retrying once after 150ms...")
+            kotlinx.coroutines.delay(150L)
+            return performTapGesture(x, y)
+        }
+        return success
+    }
+
+    private suspend fun performTapGesture(x: Float, y: Float): Boolean = suspendCancellableCoroutine { cont ->
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
             cont.resume(false)
             return@suspendCancellableCoroutine
         }
         val path = Path().apply {
             moveTo(x, y)
+            lineTo(x, y)
         }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 100))
             .build()
         val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                cont.resume(true)
+                com.shiina.mobile.debug.AppDebugServer.log("GESTURE", "Tap completed at ($x, $y)")
+                if (cont.isActive) cont.resume(true)
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                cont.resume(false)
+                com.shiina.mobile.debug.AppDebugServer.log("GESTURE", "Tap cancelled at ($x, $y)")
+                if (cont.isActive) cont.resume(false)
             }
         }, null)
         if (!dispatched) {
-            cont.resume(false)
+            com.shiina.mobile.debug.AppDebugServer.log("GESTURE", "Tap dispatch failed at ($x, $y)")
+            if (cont.isActive) cont.resume(false)
         }
     }
 
@@ -272,6 +292,43 @@ class ShiinaAccessibilityService : AccessibilityService() {
             "recents" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
             "notifications" -> performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
             else -> false
+        }
+    }
+
+    /**
+     * Captures a screenshot of the active display directly via AccessibilityService (Android 11+).
+     * Bypasses MediaProjection consent requirements.
+     */
+    suspend fun captureScreenshot(): Bitmap? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return suspendCancellableCoroutine { cont ->
+            val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+            takeScreenshot(
+                android.view.Display.DEFAULT_DISPLAY,
+                executor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        try {
+                            val hwBuffer = result.hardwareBuffer
+                            val colorSpace = result.colorSpace
+                            val bitmap = Bitmap.wrapHardwareBuffer(hwBuffer, colorSpace)
+                            val copy = bitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                            hwBuffer.close()
+                            cont.resume(copy)
+                        } catch (e: Exception) {
+                            cont.resume(null)
+                        } finally {
+                            executor.shutdown()
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        AppDebugServer.log("ACCESSIBILITY", "takeScreenshot failed: code=$errorCode")
+                        executor.shutdown()
+                        cont.resume(null)
+                    }
+                }
+            )
         }
     }
 }

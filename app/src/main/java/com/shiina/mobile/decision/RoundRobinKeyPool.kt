@@ -17,11 +17,14 @@ class RoundRobinKeyPool(private val loadKeys: () -> List<String>) {
                 val key = keys[cursor.getAndIncrement().mod(keys.size)]
                 if ((cooldownUntil[key] ?: 0L) <= now) return key
             }
-            return null
+            // If all keys are in cooldown, fallback to the next key anyway rather than failing outright
+            return keys[cursor.getAndIncrement().mod(keys.size)]
         }
     }
 
     fun reportFailure(key: String, cooldownMillis: Long = 60_000) {
         synchronized(lock) { cooldownUntil[key] = System.currentTimeMillis() + cooldownMillis }
     }
+
+    fun size(): Int = loadKeys().size
 }

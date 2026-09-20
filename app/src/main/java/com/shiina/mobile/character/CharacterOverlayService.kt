@@ -11,6 +11,12 @@ import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -21,14 +27,23 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
@@ -234,18 +249,36 @@ class CharacterOverlayService : Service() {
                             modifier = Modifier.widthIn(max = 240.dp),
                         )
                     }
+                    // CHAR-3: mood color crossfade + pop scale on change.
+                    val borderColor by animateColorAsState(
+                        targetValue = toneColor(tone),
+                        animationSpec = tween(600),
+                        label = "moodBorder",
+                    )
+                    val pop = remember(tone) { Animatable(0.86f) }
+                    LaunchedEffect(tone) {
+                        pop.snapTo(0.86f)
+                        pop.animateTo(1f, animationSpec = spring(stiffness = Spring.StiffnessLow))
+                    }
+                    // CHAR-2: blink loop for the avatar face.
+                    var blink by remember { mutableFloatStateOf(0f) }
+                    LaunchedEffect(Unit) {
+                        while (true) {
+                            delay((2500L..5200L).random())
+                            blink = 1f
+                            delay(130)
+                            blink = 0f
+                        }
+                    }
                     Box(
                         modifier = Modifier
                             .size(64.dp)
+                            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
                             .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
-                            .border(2.5.dp, toneColor(tone), CircleShape),
+                            .border(2.5.dp, borderColor, CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            text = tone.take(4).uppercase(),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        )
+                        AvatarFace(mood = tone, blink = blink)
                     }
                 }
             }
@@ -316,6 +349,8 @@ class CharacterOverlayService : Service() {
         "firm", "firm_warning" -> Color(0xFFFF8A80)   // Coral red / alert
         "warm", "validating" -> Color(0xFFA7F3C7)     // Mint green / supportive
         "calm", "neutral" -> Color(0xFF93C5FD)        // Sky blue / relaxed
+        "excited" -> Color(0xFFFDE68A)                // Bright gold / energized
+        "melancholy" -> Color(0xFFB0BEC5)             // Muted blue-grey / down
         else -> Color(0xFF93C5FD)
     }
 
@@ -366,5 +401,57 @@ class CharacterOverlayService : Service() {
         private const val CHANNEL = "character"
         private const val NOTIFICATION_ID = 2
         private const val MAX_SHOWS_PER_HOUR = 6
+    }
+}
+
+/** CHAR-2: drawn expressive face — eyes blink, mouth follows the mood. */
+@Composable
+private fun AvatarFace(mood: String, blink: Float) {
+    val ink = Color(0xFF263238)
+    Canvas(modifier = Modifier.size(46.dp)) {
+        val w = size.width
+        val h = size.height
+        val open = (1f - blink).coerceIn(0.06f, 1f)
+        val eyeR = w * 0.075f
+        drawOval(
+            color = ink,
+            topLeft = Offset(w * 0.30f - eyeR, h * 0.36f - eyeR * open),
+            size = Size(eyeR * 2, eyeR * 2 * open),
+        )
+        drawOval(
+            color = ink,
+            topLeft = Offset(w * 0.70f - eyeR, h * 0.36f - eyeR * open),
+            size = Size(eyeR * 2, eyeR * 2 * open),
+        )
+        val stroke = Stroke(width = w * 0.045f, cap = StrokeCap.Round)
+        when (mood.lowercase()) {
+            "excited" -> drawOval(
+                color = ink,
+                topLeft = Offset(w * 0.36f, h * 0.58f),
+                size = Size(w * 0.28f, h * 0.20f),
+            )
+            "pouty", "sulky" -> drawArc(
+                color = ink, startAngle = 200f, sweepAngle = 140f, useCenter = false,
+                topLeft = Offset(w * 0.38f, h * 0.60f), size = Size(w * 0.24f, h * 0.14f),
+                style = stroke,
+            )
+            "firm", "firm_warning" -> drawLine(
+                color = ink,
+                start = Offset(w * 0.38f, h * 0.68f),
+                end = Offset(w * 0.62f, h * 0.68f),
+                strokeWidth = w * 0.045f,
+                cap = StrokeCap.Round,
+            )
+            "melancholy" -> drawArc(
+                color = ink, startAngle = 210f, sweepAngle = 120f, useCenter = false,
+                topLeft = Offset(w * 0.36f, h * 0.62f), size = Size(w * 0.28f, h * 0.16f),
+                style = stroke,
+            )
+            else -> drawArc(
+                color = ink, startAngle = 20f, sweepAngle = 140f, useCenter = false,
+                topLeft = Offset(w * 0.34f, h * 0.52f), size = Size(w * 0.32f, h * 0.22f),
+                style = stroke,
+            )
+        }
     }
 }

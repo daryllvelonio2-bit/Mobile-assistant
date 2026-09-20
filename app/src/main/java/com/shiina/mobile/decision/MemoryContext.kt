@@ -26,6 +26,7 @@ class MemoryContext(
     private val factDao: MemoryFactDao,
     private val baselineDao: BaselineDao,
     private val summaryDao: MemorySummaryDao,
+    private val toolStatDao: com.shiina.mobile.data.db.ToolStatDao? = null,
 ) {
 
     suspend fun build(): String = withContext(Dispatchers.IO) {
@@ -90,6 +91,12 @@ class MemoryContext(
         }
         baselineDao.get(KEY_NUDGE_HOUR)?.let {
             learned.append("Best nudge hour: ${it.average.toInt()}:00. ")
+        }
+        // MEM-3: surface the historically most effective tone.
+        runCatching {
+            toolStatDao?.all()?.filter { it.tool.startsWith("tone:") && it.attempts >= 3 }
+                ?.maxByOrNull { s -> if (s.attempts > 0) s.successes.toDouble() / s.attempts else 0.0 }
+                ?.let { learned.append("Most effective tone so far: ${it.tool.removePrefix("tone:")}. ") }
         }
         // M7: per-section budgets so no single section starves the rest.
         return (header.toString().take(300) +

@@ -17,8 +17,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemorySummary::class,
         ToolStat::class,
         ReminderEntry::class,
+        MoodState::class,
     ],
-    version = 8,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -32,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun memorySummaryDao(): MemorySummaryDao
     abstract fun toolStatDao(): ToolStatDao
     abstract fun reminderDao(): ReminderDao
+    abstract fun moodStateDao(): MoodStateDao
 }
 
 /** v2: episodic memory — one row per decision round. Never destructive. */
@@ -134,6 +136,31 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
                 "`text` TEXT NOT NULL, " +
                 "`fireMillis` INTEGER NOT NULL, " +
                 "`createdMillis` INTEGER NOT NULL)",
+        )
+    }
+}
+
+/** v10: ACT-2 — repeating reminders (repeat type + weekday value). */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `reminders` ADD COLUMN `repeatType` TEXT NOT NULL DEFAULT 'none'")
+        db.execSQL("ALTER TABLE `reminders` ADD COLUMN `repeatValue` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** v9: Dynamic Mood Balancing — persistent valence-arousal mood state. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `mood_state` (" +
+                "`id` INTEGER NOT NULL, " +
+                "`valence` REAL NOT NULL, " +
+                "`arousal` REAL NOT NULL, " +
+                "`mood` TEXT NOT NULL, " +
+                "`intensity` REAL NOT NULL, " +
+                "`reason` TEXT NOT NULL, " +
+                "`updatedMillis` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`id`))",
         )
     }
 }

@@ -19,13 +19,33 @@ class KeyStoreKeys(context: Context) {
         )
     }
 
-    fun getKeys(provider: String): List<String> =
+    fun getKeys(provider: String = "gemini"): List<String> =
         prefs.getString(provider, "").orEmpty()
             .split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
-    fun setKeys(provider: String, keys: List<String>) {
-        prefs.edit().putString(provider, keys.joinToString(",")).apply()
+    fun setKeys(provider: String = "gemini", keys: List<String>) {
+        prefs.edit().putString(provider, keys.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(",")).apply()
+    }
+
+    fun addKey(provider: String = "gemini", key: String): Boolean {
+        val trimmed = key.trim()
+        if (trimmed.isEmpty()) return false
+        val current = getKeys(provider).toMutableList()
+        if (current.contains(trimmed)) return false
+        current.add(trimmed)
+        setKeys(provider, current)
+        return true
+    }
+
+    fun removeKey(provider: String = "gemini", key: String): Boolean {
+        val trimmed = key.trim()
+        val current = getKeys(provider).toMutableList()
+        val removed = current.remove(trimmed)
+        if (removed) {
+            setKeys(provider, current)
+        }
+        return removed
     }
 }

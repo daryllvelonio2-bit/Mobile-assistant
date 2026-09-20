@@ -78,8 +78,8 @@ class ActionExecutor(
         if (decision.action != "NONE" && decision.action in allowed) {
             parts += runVerb(decision.action, decision.actionParam)
         }
-        // A15: clamp extras to 2 and validate verbs before execution.
-        decision.extraActions.take(2)
+        // A15: clamp extras to the ordered receipt budget and validate verbs.
+        decision.extraActions.take(4)
             .filter { it.first in allowed }
             .forEach { (a, p) -> parts += runVerb(a, p) }
         val summary = parts.joinToString(" | ").take(280)
@@ -116,6 +116,20 @@ class ActionExecutor(
                 "fact learned: $k"
             } else "fact parse failed"
         }
+        "REMEMBER" -> {
+            val k = param.substringBefore("=").trim()
+            val v = param.substringAfter("=", "").trim()
+            if (k.isNotEmpty() && v.isNotEmpty()) {
+                runCatching { memoryStore?.remember(k, v, "stated") }
+                "remembered: $k"
+            } else "remember needs key=value"
+        }
+        "LIST_REMINDERS" -> runCatching { reminders?.listReminders().orEmpty() }
+            .getOrDefault("no reminders set").ifEmpty { "no reminders set" }
+        "CANCEL_REMINDER" -> runCatching { reminders?.cancelReminder(param).orEmpty() }
+            .getOrDefault("cancel failed").ifEmpty { "cancel failed" }
+        "SNOOZE_REMINDER" -> runCatching { reminders?.snoozeReminder(param).orEmpty() }
+            .getOrDefault("snooze failed").ifEmpty { "snooze failed" }
         "TOGGLE_SCREENSHOT" -> {
             execute("toggle_screenshot")
             "screenshot capture toggled"
