@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationsPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
+        runCatching { com.shiina.mobile.debug.DebugTalkService.start(this) }
         val container = (application as CompanionApp).container
         val settingsVm = ViewModelProvider(
             this,
@@ -115,9 +116,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        val container = (application as CompanionApp).container
+        runCatching { container.userActivityTracker.recordActivity() }
         // Screenshot toggle on but no projection yet -> ask for capture consent once.
         CoroutineScope(Dispatchers.Main).launch {
-            val container = (application as CompanionApp).container
             val enabled = runCatching {
                 container.settingsRepository.screenshotEnabled.first()
             }.getOrDefault(false)

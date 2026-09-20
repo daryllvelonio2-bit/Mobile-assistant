@@ -63,11 +63,25 @@ class ChatHistory(
         const val MAX_CONTEXT_CHARS = 100_000
         const val RECENT_PRESERVE_CHARS = 40_000
         const val FACT_COMPACTED_KEY = "chat_compacted_summary"
+
+        private val TURN_DATE_FMT = java.text.SimpleDateFormat("yyyy-MM-dd h:mm a", java.util.Locale.getDefault())
+
+        fun formatTurn(turn: ChatTurn): String {
+            val timePrefix = if (turn.timestampMillis > 0L) {
+                "[${TURN_DATE_FMT.format(java.util.Date(turn.timestampMillis))}] "
+            } else ""
+            return "$timePrefix${turn.role.replaceFirstChar { c -> c.uppercase() }}: ${turn.text}"
+        }
     }
 
     suspend fun addUser(text: String) = add("user", text)
 
-    suspend fun addShiina(text: String) = add("shiina", text)
+    suspend fun addShiina(text: String) {
+        if (text.contains("\"candidates\"") || text.contains("\"finishReason\"") || text.contains("MALFORMED_RESPONSE")) {
+            return
+        }
+        add("shiina", text)
+    }
 
     private suspend fun add(role: String, text: String) {
         // No truncation, no deletion! Store verbatim and permanent.
@@ -83,16 +97,20 @@ class ChatHistory(
      * Auto-compacts older turns if 100k context is exceeded.
      */
     suspend fun buildConversationContext(): String {
-        val turns = dao.all()
+        val rawTurns = dao.all()
+        if (rawTurns.isEmpty()) return ""
+
+        // Filter out any corrupted error/JSON turns
+        val turns = rawTurns.filterNot {
+            it.text.contains("\"candidates\"") || it.text.contains("\"finishReason\"") || it.text.contains("MALFORMED_RESPONSE")
+        }
         if (turns.isEmpty()) return ""
 
-        val totalChars = turns.sumOf { it.text.length + it.role.length + 4 }
+        val totalChars = turns.sumOf { it.text.length + it.role.length + 24 }
         val savedDigest = runCatching { factDao?.get(FACT_COMPACTED_KEY)?.value }.getOrNull().orEmpty()
 
         if (totalChars <= MAX_CONTEXT_CHARS) {
-            val verbatim = turns.joinToString("\n") {
-                "${it.role.replaceFirstChar { c -> c.uppercase() }}: ${it.text}"
-            }
+            val verbatim = turns.joinToString("\n") { formatTurn(it) }
             return if (savedDigest.isNotBlank()) {
                 "## Earlier Conversation (Compacted)\n$savedDigest\n\n## Active Conversation\n$verbatim"
             } else {
@@ -111,7 +129,7 @@ class ChatHistory(
         val olderTurns = mutableListOf<ChatTurn>()
 
         for (turn in turns.reversed()) {
-            val turnLen = turn.text.length + turn.role.length + 4
+            val turnLen = turn.text.length + turn.role.length + 24
             if (recentChars + turnLen <= RECENT_PRESERVE_CHARS || recentTurns.isEmpty()) {
                 recentTurns.add(turn)
                 recentChars += turnLen
@@ -140,9 +158,7 @@ class ChatHistory(
             }
         }
 
-        val recentVerbatim = recentTurns.joinToString("\n") {
-            "${it.role.replaceFirstChar { c -> c.uppercase() }}: ${it.text}"
-        }
+        val recentVerbatim = recentTurns.joinToString("\n") { formatTurn(it) }
 
         return buildString {
             if (newDigest.isNotBlank()) {
@@ -162,8 +178,10 @@ class ChatHistory(
             sb.append(existingDigest.trim()).append(" ")
         }
         val userMessages = turns.filter { it.role.equals("user", ignoreCase = true) }
-        val topics = userMessages.map { it.text.trim() }
-            .filter { it.length in 5..120 }
+        val topics = userMessages.map {
+            val time = if (it.timestampMillis > 0L) "[${TURN_DATE_FMT.format(java.util.Date(it.timestampMillis))}] " else ""
+            "$time${it.text.trim()}"
+        }.filter { it.length in 5..140 }
             .takeLast(20)
 
         sb.append("Previously discussed: ")

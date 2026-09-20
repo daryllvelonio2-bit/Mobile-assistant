@@ -311,6 +311,7 @@ class CharacterOverlayService : Service() {
     }
 
     private fun toneColor(t: String): Color = when (t.lowercase()) {
+        "pouty", "sulky" -> Color(0xFFE879F9)        // Pouty magenta / moody violet
         "candid", "candid_direct" -> Color(0xFFFFC14D) // Warm amber / playful
         "firm", "firm_warning" -> Color(0xFFFF8A80)   // Coral red / alert
         "warm", "validating" -> Color(0xFFA7F3C7)     // Mint green / supportive

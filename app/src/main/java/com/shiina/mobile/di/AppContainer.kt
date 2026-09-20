@@ -78,6 +78,10 @@ class AppContainer(context: Context) {
 
     val chatHistory: ChatHistory by lazy { ChatHistory(chatTurnDao, memoryFactDao) }
 
+    val userActivityTracker: com.shiina.mobile.data.activity.UserActivityTracker by lazy {
+        com.shiina.mobile.data.activity.UserActivityTracker(appContext)
+    }
+
     val learnedMemoryManager: com.shiina.mobile.memory.LearnedMemoryManager by lazy {
         com.shiina.mobile.memory.LearnedMemoryManager(appContext, memoryStore)
     }

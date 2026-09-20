@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,6 +41,8 @@ class DebugTalkService : Service() {
     @Volatile private var lastMode: String = CharacterMode.STAY.name
     @Volatile private var lastReply: String = "Say hi from the notification reply."
     @Volatile private var logsEnabled: Boolean = true
+    @Volatile private var isGreetingInProgress: Boolean = false
+    @Volatile private var lastGreetingTimestamp: Long = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -54,6 +57,8 @@ class DebugTalkService : Service() {
                 lastTone = com.shiina.mobile.decision.ShiinaPrompts.moodForTone(recentTone)
                 withContext(Dispatchers.Main) { refresh() }
             }
+            delay(1500L)
+            triggerBootGreeting()
         }
     }
 
@@ -80,6 +85,7 @@ class DebugTalkService : Service() {
                     lastReply = "Say hi from the notification reply."
                     dbg("Shiina: session reset (memory cleared from Settings)")
                 }
+                ACTION_BOOT_GREETING -> triggerBootGreeting()
             }
         }.onFailure { e ->
             AppDebugServer.log("ERROR", "DebugTalk action failed: ${e.message}")
@@ -168,6 +174,8 @@ class DebugTalkService : Service() {
         scope.launch {
             runCatching { container.memoryOutcomes.onTalkReply() }
         }
+        container.userActivityTracker.recordActivity()
+
         if (text.startsWith("remember ", ignoreCase = true)) {
             scope.launch {
                 lastReply = runCatching {
@@ -199,6 +207,15 @@ class DebugTalkService : Service() {
             return
         }
         scope.launch {
+            val lastUserTurn = runCatching {
+                container.chatHistory.allTurns().lastOrNull { it.role.equals("user", ignoreCase = true) }?.timestampMillis
+            }.getOrNull() ?: 0L
+            val hoursInactive = container.userActivityTracker.getHoursSinceLastActive(fallback = lastUserTurn)
+            if (hoursInactive >= 10.0) {
+                lastTone = "pouty"
+                dbg("User was inactive for ${"%.1f".format(hoursInactive)}h — setting mood to POUTY")
+            }
+
             var extra = ""
             var attachShot = false
             if (isSearchAsk(text)) {
@@ -226,7 +243,16 @@ class DebugTalkService : Service() {
                     "No music is currently playing on the device. Tell them so directly and briefly. "
                 }
             }
-            val reply = runCatching { askGemini(text, lastTone, lastMode, extra, attachShot) }.getOrElse { e ->
+            val reply = runCatching {
+                askGemini(
+                    userText = text,
+                    tone = lastTone,
+                    mode = lastMode,
+                    extraContext = extra,
+                    attachScreenshot = attachShot,
+                    hoursInactive = hoursInactive,
+                )
+            }.getOrElse { e ->
                 AppDebugServer.log("ERROR", "DebugTalk chat failed: ${e.message}")
                 "Gemini unreachable (${e.message ?: "error"}). Check API keys in Settings."
             }
@@ -403,6 +429,7 @@ class DebugTalkService : Service() {
             }
             val moodRaw = json.optString("mood", "").lowercase()
             val mood = when (moodRaw) {
+                "pouty", "sulky" -> "pouty"
                 "candid", "candid_direct" -> "candid"
                 "firm", "firm_warning" -> "firm"
                 "warm", "validating" -> "warm"
@@ -443,15 +470,19 @@ class DebugTalkService : Service() {
         mode: String,
         extraContext: String = "",
         attachScreenshot: Boolean = false,
+        isSystemTrigger: Boolean = false,
+        hoursInactive: Double = 0.0,
     ): String {
         val container = (application as CompanionApp).container
         val history = runCatching { container.chatHistory.buildConversationContext() }.getOrDefault("")
-        runCatching { container.chatHistory.addUser(userText) }
+        if (!isSystemTrigger) {
+            runCatching { container.chatHistory.addUser(userText) }
+        }
         val memory = runCatching { container.memoryContext.build() }.getOrDefault("")
         val userName = container.learnedMemoryManager.get("user_name")
             ?: runCatching { container.memoryStore.factValue("user_name") }.getOrNull()
         val identityRule = if (userName != null) {
-            "Their name is $userName. Greet them simply and naturally (e.g. 'Hey $userName!'). Never add cheesy filler like 'just hanging out with you'."
+            "Their name is $userName. Talk to them naturally like a close friend who knows them well. Never add cheesy companion filler like 'just hanging out with you'."
         } else {
             "You do not know their name yet — never invent or guess one."
         }
@@ -477,6 +508,9 @@ class DebugTalkService : Service() {
             appendLine("# Live Context & Device Senses")
             appendLine("- $timeInfo")
             appendLine("- Senses: $senses")
+            if (hoursInactive >= 10.0 && !isSystemTrigger) {
+                appendLine("- User Absence Alert: The user has not opened the app or spoken to you for ${hoursInactive.toInt()} hours! You are in a POUTY bad mood because they neglected you. Sulk, pout, or complain about being abandoned before warming back up.")
+            }
             appendLine()
 
             if (learnedMemory.isNotBlank()) {
@@ -497,8 +531,14 @@ class DebugTalkService : Service() {
                 appendLine()
             }
 
-            appendLine("# Current User Message")
-            appendLine("User: $userText")
+            val nowFmt = java.text.SimpleDateFormat("yyyy-MM-dd h:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+            if (isSystemTrigger) {
+                appendLine("# Event Trigger")
+                appendLine("[$nowFmt] $userText")
+            } else {
+                appendLine("# Current User Message")
+                appendLine("[$nowFmt] User: $userText")
+            }
         }
 
         if (extraContext.isNotBlank() || attachScreenshot) {
@@ -809,6 +849,91 @@ class DebugTalkService : Service() {
             .build()
     }
 
+    private fun triggerBootGreeting() {
+        scope.launch {
+            if (isGreetingInProgress) {
+                dbg("Boot greeting already in progress — skipping")
+                return@launch
+            }
+            val now = System.currentTimeMillis()
+            if (now - lastGreetingTimestamp < 10 * 60 * 1000L) {
+                dbg("Boot greeting skipped: last greeting was within 10m")
+                return@launch
+            }
+            val container = (application as CompanionApp).container
+            val lastTurn = runCatching { container.chatHistory.allTurns().lastOrNull() }.getOrNull()
+            if (lastTurn != null && now - lastTurn.timestampMillis < 10 * 60 * 1000L) {
+                dbg("Boot greeting skipped: recent conversation turn within 10m (${lastTurn.text.take(30)})")
+                return@launch
+            }
+
+            isGreetingInProgress = true
+            try {
+                val lastUserTurn = runCatching {
+                    container.chatHistory.allTurns().lastOrNull { it.role.equals("user", ignoreCase = true) }?.timestampMillis
+                }.getOrNull() ?: 0L
+                val hoursInactive = container.userActivityTracker.getHoursSinceLastActive(fallback = lastUserTurn)
+
+                if (hoursInactive >= 10.0) {
+                    lastTone = "pouty"
+                } else {
+                    val recentTone = runCatching { container.memoryEpisodeDao.recent(1).firstOrNull()?.tone }.getOrNull()
+                    if (!recentTone.isNullOrBlank()) {
+                        lastTone = com.shiina.mobile.decision.ShiinaPrompts.moodForTone(recentTone)
+                    }
+                }
+
+                dbg("Triggering boot greeting with mood: $lastTone (inactive: ${"%.1f".format(hoursInactive)}h)")
+                val bootPrompt = com.shiina.mobile.decision.ShiinaPrompts.bootGreetingPrompt(lastTone, hoursInactive)
+
+                val reply = runCatching {
+                    askGemini(
+                        userText = bootPrompt,
+                        tone = lastTone,
+                        mode = lastMode,
+                        extraContext = "",
+                        attachScreenshot = false,
+                        isSystemTrigger = true,
+                        hoursInactive = hoursInactive,
+                    )
+                }.getOrElse { e ->
+                    AppDebugServer.log("ERROR", "Boot greeting failed: ${e.message}")
+                    ""
+                }
+
+                if (reply.isNotBlank() && !reply.startsWith("Gemini unreachable")) {
+                    lastGreetingTimestamp = System.currentTimeMillis()
+                    lastReply = reply
+                    runCatching { container.chatHistory.addShiina(reply) }
+                    dbg("Shiina boot greeting ($lastTone): $reply")
+                    pushTextToOverlay(reply)
+                    runCatching {
+                        container.memoryEpisodeDao.insert(
+                            com.shiina.mobile.data.db.MemoryEpisode(
+                                timestampMillis = System.currentTimeMillis(),
+                                source = "boot_greeting",
+                                entertainmentMinutes = 0,
+                                entertainmentBaseline = 0.0,
+                                goalsOpen = 0,
+                                goalsDone = 0,
+                                goalsMissed = 0,
+                                tone = lastTone,
+                                interrupt = false,
+                                action = "NONE",
+                                messageHash = reply.hashCode(),
+                            ),
+                        )
+                    }
+                    withContext(Dispatchers.Main) { refresh() }
+                } else if (reply.startsWith("Gemini unreachable")) {
+                    AppDebugServer.log("TALK_BOOT", "Boot greeting suppressed (Gemini unreachable: $reply)")
+                }
+            } finally {
+                isGreetingInProgress = false
+            }
+        }
+    }
+
     private fun refresh() {
         runCatching {
             val manager = getSystemService(NotificationManager::class.java)
@@ -831,6 +956,7 @@ class DebugTalkService : Service() {
         const val ACTION_TALK = "com.shiina.mobile.debug.TALK"
         const val ACTION_HIDE = "com.shiina.mobile.debug.HIDE"
         const val ACTION_RESET_SESSION = "com.shiina.mobile.debug.RESET_SESSION"
+        const val ACTION_BOOT_GREETING = "com.shiina.mobile.debug.BOOT_GREETING"
         const val KEY_TALK = "key_talk"
         const val MAX_TOOL_CALLS = 4
 
