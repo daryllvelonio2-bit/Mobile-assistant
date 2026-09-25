@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Build
+import android.os.PowerManager
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.debug.AppDebugServer
 import kotlinx.coroutines.CoroutineScope
@@ -70,6 +71,11 @@ class CaptureWatcher(
             lastFgPkg = currentForegroundPackage().orEmpty()
             musicWasActive = isMusicActive()
             while (isActive) {
+                val screenOn = isScreenOn()
+                if (!screenOn) {
+                    delay(POLL_SCREEN_OFF_MS)
+                    continue
+                }
                 runCatching {
                     val pkg = currentForegroundPackage()
                     if (pkg != null && pkg != lastFgPkg && pkg != context.packageName) {
@@ -98,6 +104,7 @@ class CaptureWatcher(
     }
 
     private suspend fun maybeCapture(reason: String) {
+        if (!isScreenOn()) return
         if (!settings.screenshotEnabled.first()) return
         if (!taker.ready) {
             AppDebugServer.log("CAPTURE", "Trigger $reason: no projection consent yet")
@@ -110,6 +117,13 @@ class CaptureWatcher(
         if (roll >= CHANCE) return
         val file = taker.capture(reason.replace(Regex("[^A-Za-z0-9]+"), "_"))
         if (file != null) lastCaptureAt = now
+    }
+
+    private fun isScreenOn(): Boolean {
+        return runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            pm?.isInteractive ?: true
+        }.getOrDefault(true)
     }
 
     private fun currentForegroundPackage(): String? {
@@ -139,6 +153,7 @@ class CaptureWatcher(
 
     companion object {
         private const val POLL_MS = 15_000L
+        private const val POLL_SCREEN_OFF_MS = 60_000L
         private const val COOLDOWN_MS = 15 * 60 * 1_000L
         private const val CHANCE = 0.3f
     }

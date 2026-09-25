@@ -32,6 +32,7 @@ class ActionExecutor(
     private val web: WebSearch? = null,
     private val pageReader: PageReader? = null,
     private val reminders: ReminderScheduler? = null,
+    private val triggers: com.shiina.mobile.action.TriggerScheduler? = null,
     private val toolTracker: ToolTracker? = null,
     private val episodeDao: MemoryEpisodeDao? = null,
     private val deviceActionController: DeviceActionController? = null,
@@ -162,6 +163,14 @@ class ActionExecutor(
                 .getOrDefault("")
             msg.ifEmpty { "reminder time unclear: ${param.take(40)}" }
         }
+        "SET_TRIGGER" -> {
+            val msg = runCatching { triggers?.parseAndSchedule(param).orEmpty() }.getOrDefault("")
+            msg.ifEmpty { "trigger time unclear: ${param.take(40)}" }
+        }
+        "LIST_TRIGGERS" -> runCatching { triggers?.listTriggers().orEmpty() }
+            .getOrDefault("no triggers set").ifEmpty { "no triggers set" }
+        "CANCEL_TRIGGER" -> runCatching { triggers?.cancelTrigger(param).orEmpty() }
+            .getOrDefault("cancel failed").ifEmpty { "cancel failed" }
         "HIDE" -> {
             val i = Intent(context, com.shiina.mobile.character.CharacterOverlayService::class.java).apply {
                 this.action = com.shiina.mobile.character.CharacterOverlayService.ACTION_HIDE
@@ -242,6 +251,54 @@ class ActionExecutor(
             val res = controller.getDeviceState()
             runCatching { toolTracker?.record("device_state", true) }
             res
+        }
+        "GET_FOREGROUND_APP" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.getForegroundApp()
+        }
+        "GET_CURRENT_PLAYING" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.getCurrentPlaying()
+        }
+        "CLOSE_APP" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.closeApp()
+        }
+        "TOGGLE_FLASHLIGHT" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.toggleFlashlight(param)
+        }
+        "OPEN_SETTINGS" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.openSettings(param)
+        }
+        "OPEN_URL" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.openUrl(param)
+        }
+        "MANAGE_CLIPBOARD" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.manageClipboard("read", param)
+        }
+        "SYSTEM_INTENT" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            val act = param.substringBefore(":").trim()
+            val data = param.substringAfter(":", "").trim()
+            controller.systemIntent(act, data)
+        }
+        "FORGET" -> {
+            if (param.isNotBlank()) {
+                val ok = runCatching { memoryStore?.forgetKey(param) }.getOrNull() == true
+                if (ok) "forgot $param" else "fact not found: $param"
+            } else "forget needs a key"
+        }
+        "LIST_FACTS" -> {
+            val facts = runCatching { memoryStore?.allFacts()?.joinToString("; ") { "${it.key}=${it.value}" } }.getOrNull()
+            if (!facts.isNullOrBlank()) facts else "no facts remembered"
+        }
+        "SET_TIMER" -> {
+            val controller = deviceActionController ?: DeviceActionController(context)
+            controller.setTimer(param.toIntOrNull() ?: 60)
         }
         else -> {
             AppDebugServer.log("ACTION", "Unknown action rejected: $action")

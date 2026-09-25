@@ -3,6 +3,7 @@ package com.shiina.mobile.debug
 import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.CopyOnWriteArrayList
@@ -61,8 +62,10 @@ object AppDebugServer {
 
         scope.launch {
             try {
-                serverSocket = ServerSocket(PORT)
-                log("SYSTEM", "Debug server started on port $PORT. Access via http://<waydroid-ip>:$PORT")
+                // Audit B10: bind loopback ONLY — never expose telemetry on LAN/hotspot.
+                // PC access: adb forward tcp:8085 tcp:8085 -> http://127.0.0.1:8085
+                serverSocket = ServerSocket(PORT, 5, InetAddress.getLoopbackAddress())
+                log("SYSTEM", "Debug server started on 127.0.0.1:$PORT (loopback only). PC: adb forward tcp:$PORT tcp:$PORT")
                 while (isRunning) {
                     val socket = serverSocket?.accept() ?: break
                     scope.launch { handleClient(socket) }
@@ -75,6 +78,7 @@ object AppDebugServer {
 
     private fun handleClient(socket: Socket) {
         try {
+            socket.soTimeout = 5000
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             val requestLine = reader.readLine() ?: return
             val output = socket.getOutputStream()
@@ -103,8 +107,10 @@ object AppDebugServer {
             output.write(header.toByteArray(Charsets.UTF_8))
             output.write(responseBytes)
             output.flush()
-            socket.close()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        } finally {
+            runCatching { socket.close() }
+        }
     }
 
     private fun buildHtmlDashboard(): String {

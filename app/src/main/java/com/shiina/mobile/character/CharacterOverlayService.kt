@@ -13,13 +13,20 @@ import android.view.Gravity
 import android.view.WindowManager
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
@@ -47,6 +54,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -75,6 +84,10 @@ class CharacterOverlayService : Service() {
     private var tone by mutableStateOf("calm")
     private var message by mutableStateOf("")
     private var mode: CharacterMode = CharacterMode.STAY
+    /** CHAR-3D: fall back to the 2D face if the 3D model fails to load. */
+    private var use3D by mutableStateOf(true)
+    @Volatile private var locked: Boolean = false
+    private var lockedSince: Long = 0L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wanderJob: Job? = null
     private var overlayOwner: OverlayLifecycleOwner? = null
@@ -129,29 +142,55 @@ class CharacterOverlayService : Service() {
         runCatching {
             when (intent?.action) {
                 ACTION_HIDE -> {
-                    removeBubble()
-                    scope.launch(Dispatchers.IO) {
-                        runCatching {
-                            (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
+                    if (locked) {
+                        // Locked trigger overlay: she refuses to be dismissed.
+                        message = "Nope. You asked me to hold you to this — reply to me first."
+                        ensureBubble()
+                    } else {
+                        removeBubble()
+                        scope.launch(Dispatchers.IO) {
+                            runCatching {
+                                (application as CompanionApp).container.memoryOutcomes.onOverlayHidden()
+                            }
                         }
                     }
                 }
+                ACTION_UNLOCK -> {
+                    locked = false
+                    message = ""
+                    removeBubble()
+                    com.shiina.mobile.debug.AppDebugServer.log("SERVICE", "Locked overlay released")
+                }
                 else -> {
                     // Audit F6: max 6 overlay shows per hour, independent of decisions.
+                    // LOCKED trigger shows bypass the cap — they must always appear.
+                    val isLockedShow = intent?.getBooleanExtra(EXTRA_LOCKED, false) == true
                     val now = System.currentTimeMillis()
                     while (showTimestamps.isNotEmpty() && now - showTimestamps.first() > 3_600_000L) {
                         showTimestamps.removeFirst()
                     }
                     if (showTimestamps.size >= MAX_SHOWS_PER_HOUR) {
-                        com.shiina.mobile.debug.AppDebugServer.log(
-                            "SERVICE", "Overlay rate limit: ${showTimestamps.size} shows this hour — skipping",
-                        )
+                        if (isLockedShow) {
+                            com.shiina.mobile.debug.AppDebugServer.log(
+                                "SERVICE", "Overlay rate cap hit but LOCKED trigger bypasses (${showTimestamps.size}/h)",
+                            )
+                        } else {
+                            com.shiina.mobile.debug.AppDebugServer.log(
+                                "SERVICE", "Overlay rate limit: ${showTimestamps.size} shows this hour — skipping",
+                            )
+                            return START_STICKY
+                        }
                     } else {
                         showTimestamps.addLast(now)
                     }
                     tone = intent?.getStringExtra(EXTRA_TONE) ?: tone
                     if (intent?.hasExtra(EXTRA_MESSAGE) == true) {
                         message = intent.getStringExtra(EXTRA_MESSAGE).orEmpty()
+                    }
+                    if (intent?.getBooleanExtra(EXTRA_LOCKED, false) == true) {
+                        locked = true
+                        lockedSince = System.currentTimeMillis()
+                        com.shiina.mobile.debug.AppDebugServer.log("SERVICE", "Overlay LOCKED until user replies")
                     }
                     val requested = intent?.getStringExtra(EXTRA_MODE)
                         ?.let { runCatching { CharacterMode.valueOf(it) }.getOrNull() }
@@ -222,19 +261,22 @@ class CharacterOverlayService : Service() {
         view.setContent {
             MaterialTheme {
                 Column(
-                    modifier = Modifier
-                        .pointerInput(Unit) {
-                            detectDragGestures { change, drag ->
-                                change.consume()
-                                params?.let { p ->
-                                    p.x += drag.x.toInt()
-                                    p.y += drag.y.toInt()
-                                    windowManager?.updateViewLayout(view, p)
-                                }
-                            }
-                        },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    val isBusy by com.shiina.mobile.debug.ChatBus.busy.collectAsState()
+                    val currentProgress by com.shiina.mobile.debug.ChatBus.progress.collectAsState()
+
+                    val infiniteTransition = rememberInfiniteTransition(label = "busyShimmer")
+                    val pulseAlpha by infiniteTransition.animateFloat(
+                        initialValue = 0.35f,
+                        targetValue = 1.0f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(700, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "pulseAlpha",
+                    )
+
                     if (message.isNotEmpty()) {
                         Text(
                             text = message,
@@ -248,13 +290,28 @@ class CharacterOverlayService : Service() {
                             color = toneColor(tone),
                             modifier = Modifier.widthIn(max = 240.dp),
                         )
+                    } else if (isBusy) {
+                        val progressLabel = if (currentProgress.isNotBlank()) currentProgress else "Thinking..."
+                        Text(
+                            text = "• $progressLabel",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                shadow = Shadow(
+                                    color = Color.Black.copy(alpha = 0.8f),
+                                    offset = Offset(1f, 1f),
+                                    blurRadius = 3f,
+                                ),
+                            ),
+                            color = toneColor(tone).copy(alpha = pulseAlpha),
+                            modifier = Modifier.widthIn(max = 240.dp),
+                        )
                     }
                     // CHAR-3: mood color crossfade + pop scale on change.
-                    val borderColor by animateColorAsState(
+                    val baseBorderColor by animateColorAsState(
                         targetValue = toneColor(tone),
                         animationSpec = tween(600),
                         label = "moodBorder",
                     )
+                    val borderColor = if (isBusy) baseBorderColor.copy(alpha = pulseAlpha) else baseBorderColor
                     val pop = remember(tone) { Animatable(0.86f) }
                     LaunchedEffect(tone) {
                         pop.snapTo(0.86f)
@@ -272,13 +329,64 @@ class CharacterOverlayService : Service() {
                     }
                     Box(
                         modifier = Modifier
-                            .size(64.dp)
                             .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
-                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
-                            .border(2.5.dp, borderColor, CircleShape),
+                            // BACKLOG B2: tap = open Chat tab, long-press = dismiss bubble
+                            // (a locked trigger overlay refuses to be shushed away).
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onTap = {
+                                        runCatching {
+                                            com.shiina.mobile.MainActivity.pendingTab = 1
+                                            startActivity(
+                                                Intent(this@CharacterOverlayService, com.shiina.mobile.MainActivity::class.java)
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                                            )
+                                        }
+                                    },
+                                    onLongPress = {
+                                        if (!locked) {
+                                            runCatching {
+                                                startService(
+                                                    Intent(this@CharacterOverlayService, CharacterOverlayService::class.java)
+                                                        .apply { action = ACTION_HIDE },
+                                                )
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, drag ->
+                                    change.consume()
+                                    params?.let { p ->
+                                        p.x += drag.x.toInt()
+                                        p.y += drag.y.toInt()
+                                        windowManager?.updateViewLayout(view, p)
+                                    }
+                                }
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
-                        AvatarFace(mood = tone, blink = blink)
+                        if (use3D) {
+                            // CHAR-3D: real 3D anime model, mood-tinted light.
+                            AnimeCharacter3D(
+                                modifier = Modifier
+                                    .width(120.dp)
+                                    .height(185.dp),
+                                mood = tone,
+                                onFallback = { use3D = false },
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+                                    .border(if (isBusy) 3.5.dp else 2.5.dp, borderColor, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                AvatarFace(mood = tone, blink = blink)
+                            }
+                        }
                     }
                 }
             }
@@ -294,7 +402,16 @@ class CharacterOverlayService : Service() {
         }.onSuccess {
             com.shiina.mobile.debug.AppDebugServer.log("SERVICE", "wm.addView SUCCESS! Overlay bubble rendered on screen.")
             overlayOwner?.resume()
-            if (mode == CharacterMode.WANDER) {
+            // Locked overlays stay anchored at center-screen so they can't be
+            // pushed out of the way; only a reply (ACTION_UNLOCK) releases them.
+            if (locked) {
+                params?.let { p ->
+                    p.gravity = Gravity.CENTER
+                    p.x = 0; p.y = 0
+                    runCatching { wm.updateViewLayout(view, p) }
+                }
+                wanderJob?.cancel()
+            } else if (mode == CharacterMode.WANDER) {
                 scope.launch(Dispatchers.IO) {
                     runCatching {
                         (application as CompanionApp).container.memoryOutcomes.markShown()
@@ -328,6 +445,7 @@ class CharacterOverlayService : Service() {
 
     private fun startWander() {
         wanderJob?.cancel()
+        if (locked) return // locked overlays do not wander away
         wanderJob = scope.launch(Dispatchers.Main) {
             while (isActive) {
                 delay(4_000)
@@ -393,11 +511,13 @@ class CharacterOverlayService : Service() {
     companion object {
         const val ACTION_SHOW = "com.shiina.mobile.character.SHOW"
         const val ACTION_HIDE = "com.shiina.mobile.character.HIDE"
+        const val ACTION_UNLOCK = "com.shiina.mobile.character.UNLOCK"
         const val EXTRA_TONE = "tone"
         const val EXTRA_MESSAGE = "message"
         const val EXTRA_MODE = "mode"
         const val EXTRA_INTERRUPT = "interrupt"
         const val EXTRA_ACTION = "action"
+        const val EXTRA_LOCKED = "locked"
         private const val CHANNEL = "character"
         private const val NOTIFICATION_ID = 2
         private const val MAX_SHOWS_PER_HOUR = 6

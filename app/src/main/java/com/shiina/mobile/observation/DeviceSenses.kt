@@ -1,11 +1,16 @@
 package com.shiina.mobile.observation
 
+import android.app.NotificationManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Build
 import android.os.PowerManager
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -49,11 +54,16 @@ class DeviceSenses(
                 .put("battery", batt)
                 .put("low_battery", batt in 0..15)
                 .put("charging", charging())
+                .put("power_save", powerSaveMode())
                 .put("screen", if (screenOn()) "on" else "off")
                 .put("screen_resolution", metrics.toString())
                 .put("ringer", ringer())
+                .put("do_not_disturb", dndMode())
+                .put("network", networkState())
+                .put("audio_route", audioRouting())
                 .put("music_playing", isPlaying)
                 .put("foreground_app", foregroundApp() ?: "unknown (no usage access)")
+                .put("briefing_context", buildBriefingContext())
             val am = context.getSystemService(AudioManager::class.java)
             val curVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: -1
             val maxVol = am?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: -1
@@ -97,6 +107,33 @@ class DeviceSenses(
         }
         players
     }.getOrDefault(emptyList())
+
+    private fun buildBriefingContext(): JSONObject {
+        val obj = JSONObject()
+        runCatching {
+            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+            // Determine time-of-day category for proactive check-in focus
+            val period = when (hour) {
+                in 5..11 -> "morning_briefing"
+                in 12..16 -> "afternoon_checkin"
+                in 17..21 -> "evening_transition"
+                else -> "late_night_guardian"
+            }
+            obj.put("period", period)
+            
+            // Check charging trend & battery health
+            val battManager = context.getSystemService(BatteryManager::class.java)
+            val isCharging = charging()
+            val battPct = battery()
+            obj.put("recommendation_hint", when {
+                battPct <= 20 && !isCharging -> "Battery is low ($battPct%). Suggest power saving or plugging in."
+                hour in 5..11 -> "Morning check-in: review day ahead and energy levels."
+                hour in 23..4 -> "Late night active use: gently encourage rest and sleep hygiene."
+                else -> "General active companion mode."
+            })
+        }
+        return obj
+    }
 
     fun isMusicPlaying(): Boolean = musicPlaying()
 
@@ -162,6 +199,61 @@ class DeviceSenses(
         in 12..17 -> "afternoon"
         else -> "evening"
     }
+
+    private fun networkState(): String = runCatching {
+        val cm = context.getSystemService(ConnectivityManager::class.java) ?: return "unknown"
+        val activeNet = cm.activeNetwork ?: return "offline"
+        val caps = cm.getNetworkCapabilities(activeNet) ?: return "offline"
+        when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi (connected)"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Cellular data"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "connected"
+        }
+    }.getOrDefault("unknown")
+
+    private fun audioRouting(): String = runCatching {
+        val am = context.getSystemService(AudioManager::class.java) ?: return "speaker"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val isBt = devices.any {
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+            }
+            val isWired = devices.any {
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+                it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+            }
+            when {
+                isBt -> "bluetooth (headphones/earbuds)"
+                isWired -> "wired headset"
+                else -> "internal speaker"
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            when {
+                am.isBluetoothA2dpOn -> "bluetooth headphones"
+                am.isWiredHeadsetOn -> "wired headset"
+                else -> "speaker"
+            }
+        }
+    }.getOrDefault("speaker")
+
+    private fun powerSaveMode(): Boolean = runCatching {
+        context.getSystemService(PowerManager::class.java)?.isPowerSaveMode ?: false
+    }.getOrDefault(false)
+
+    private fun dndMode(): String = runCatching {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return "off"
+        when (nm.currentInterruptionFilter) {
+            NotificationManager.INTERRUPTION_FILTER_NONE -> "total_silence"
+            NotificationManager.INTERRUPTION_FILTER_PRIORITY -> "priority_only"
+            NotificationManager.INTERRUPTION_FILTER_ALARMS -> "alarms_only"
+            else -> "off"
+        }
+    }.getOrDefault("off")
 
     companion object {
         private const val CACHE_MS = 30_000L

@@ -7,7 +7,9 @@ import com.shiina.mobile.data.db.MemorySummary
 import com.shiina.mobile.data.security.KeyStoreKeys
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.decision.MemoryContext
+import com.shiina.mobile.memory.LearnedMemoryManager
 import com.shiina.mobile.memory.MemoryStore
+import com.shiina.mobile.memory.ProceduralMemoryStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,15 +21,35 @@ class SettingsViewModel(
     private val keyStore: KeyStoreKeys,
     private val memoryStore: MemoryStore,
     private val memoryContext: MemoryContext? = null,
+    private val learnedMemoryManager: LearnedMemoryManager? = null,
+    private val proceduralMemoryStore: ProceduralMemoryStore? = null,
 ) : ViewModel() {
 
     val screenshotEnabled = settings.screenshotEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    val voiceTtsEnabled = settings.voiceTtsEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    val onboardingCompleted = settings.onboardingCompleted
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val alarmHour = settings.alarmHour
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 19)
 
     val alarmMinute = settings.alarmMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val bedtimeStartHour = settings.bedtimeStartHour
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 23)
+
+    val bedtimeStartMinute = settings.bedtimeStartMinute
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val bedtimeEndHour = settings.bedtimeEndHour
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 7)
+
+    val bedtimeEndMinute = settings.bedtimeEndMinute
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val geminiModel = settings.geminiModel
@@ -68,8 +90,32 @@ class SettingsViewModel(
         viewModelScope.launch { settings.setScreenshotEnabled(enabled) }
     }
 
+    fun toggleVoiceTts(enabled: Boolean) {
+        viewModelScope.launch { settings.setVoiceTtsEnabled(enabled) }
+    }
+
+    fun completeOnboarding() {
+        viewModelScope.launch { settings.setOnboardingCompleted(true) }
+    }
+
+    fun resetOnboarding() {
+        viewModelScope.launch { settings.setOnboardingCompleted(false) }
+    }
+
     fun setAlarm(hour: Int, minute: Int) {
         viewModelScope.launch { settings.setAlarm(hour, minute) }
+    }
+
+    fun setBedtimeStart(hour: Int, minute: Int) {
+        viewModelScope.launch { settings.setBedtimeStart(hour, minute) }
+    }
+
+    fun setBedtimeEnd(hour: Int, minute: Int) {
+        viewModelScope.launch { settings.setBedtimeEnd(hour, minute) }
+    }
+
+    fun setBedtime(startHour: Int, startMinute: Int, endHour: Int, endMinute: Int) {
+        viewModelScope.launch { settings.setBedtime(startHour, startMinute, endHour, endMinute) }
     }
 
     fun addGeminiKey(key: String): Boolean {
@@ -132,6 +178,9 @@ class SettingsViewModel(
     fun forgetAll() {
         viewModelScope.launch {
             runCatching { memoryStore.forgetAll() }
+            // File-backed memories survive the DB wipe — clear them too so she truly forgets.
+            runCatching { learnedMemoryManager?.clear() }
+            runCatching { proceduralMemoryStore?.clearUserProcedures() }
             loadFacts()
         }
     }

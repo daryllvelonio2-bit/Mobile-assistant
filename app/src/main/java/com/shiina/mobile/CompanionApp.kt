@@ -33,6 +33,10 @@ class CompanionApp : Application() {
                 .onFailure { e ->
                     AppDebugServer.log("ERROR", "Daily alarm schedule failed: ${e.message}")
                 }
+            runCatching { com.shiina.mobile.action.ProactiveLoop.restorePending(this@CompanionApp) }
+                .onFailure { e ->
+                    AppDebugServer.log("ERROR", "Proactive heartbeat schedule failed: ${e.message}")
+                }
         }
         scheduleNightlyReflection()
     }

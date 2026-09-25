@@ -18,8 +18,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ToolStat::class,
         ReminderEntry::class,
         MoodState::class,
+        TriggerEntry::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,6 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun toolStatDao(): ToolStatDao
     abstract fun reminderDao(): ReminderDao
     abstract fun moodStateDao(): MoodStateDao
+    abstract fun triggerDao(): TriggerDao
 }
 
 /** v2: episodic memory — one row per decision round. Never destructive. */
@@ -136,6 +138,21 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
                 "`text` TEXT NOT NULL, " +
                 "`fireMillis` INTEGER NOT NULL, " +
                 "`createdMillis` INTEGER NOT NULL)",
+        )
+    }
+}
+
+/** v11: behavior triggers — locked overlays she schedules on herself. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `triggers` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`text` TEXT NOT NULL, " +
+                "`fireMillis` INTEGER NOT NULL, " +
+                "`createdMillis` INTEGER NOT NULL, " +
+                "`repeatType` TEXT NOT NULL DEFAULT 'none', " +
+                "`strict` INTEGER NOT NULL DEFAULT 0)",
         )
     }
 }

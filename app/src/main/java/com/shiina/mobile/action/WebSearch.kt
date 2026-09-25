@@ -18,9 +18,9 @@ import java.util.concurrent.TimeUnit
  * Audit A9: result URLs are returned alongside snippets so the Talk loop can
  * chain READ_URL in the same turn. Audit A10: empty/overlong query guards.
  */
-class WebSearch {
+class WebSearch(client: OkHttpClient? = null) {
 
-    private val http = OkHttpClient.Builder()
+    private val http = (client?.newBuilder() ?: OkHttpClient.Builder())
         .callTimeout(15, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)

@@ -73,3 +73,33 @@ fun hasAllPermissions(context: Context): Boolean {
         hasAccessibilityAccess(context)
 }
 
+/**
+ * BACKLOG B7: OEM battery optimization (Huawei etc.) silently kills triggers,
+ * boot greeting, and the overlay. Surface it — but don't fold it into
+ * [hasAllPermissions] (it is a comfort warning, not a hard dependency).
+ */
+@androidx.annotation.RequiresPermission(android.Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        ?: return true
+    return runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(true)
+}
+
+fun openBatterySettings(context: Context) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val launched = runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(android.net.Uri.parse("package:${context.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.isSuccess
+        if (!launched) {
+            context.startActivity(
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+}
+

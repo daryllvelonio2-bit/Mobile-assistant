@@ -40,6 +40,12 @@ import androidx.compose.material3.RadioButton
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.ui.permissions.PermissionSection
 
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
+
 /**
  * Modern, clean Settings screen following Google Pixel / Material 3 flush list style.
  * No nested cards or heavy background containers.
@@ -48,15 +54,43 @@ import com.shiina.mobile.ui.permissions.PermissionSection
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier,
+    onReplayOnboarding: () -> Unit = {},
 ) {
     val screenshot by viewModel.screenshotEnabled.collectAsState()
+    val voiceTts by viewModel.voiceTtsEnabled.collectAsState()
     val hour by viewModel.alarmHour.collectAsState()
     val minute by viewModel.alarmMinute.collectAsState()
     val geminiKeys by viewModel.geminiKeys.collectAsState()
     val selectedModel by viewModel.geminiModel.collectAsState()
+    val bedtimeStartHour by viewModel.bedtimeStartHour.collectAsState()
+    val bedtimeStartMinute by viewModel.bedtimeStartMinute.collectAsState()
+    val bedtimeEndHour by viewModel.bedtimeEndHour.collectAsState()
+    val bedtimeEndMinute by viewModel.bedtimeEndMinute.collectAsState()
 
     var newKeyText by remember { mutableStateOf("") }
     var showNewKey by remember { mutableStateOf(false) }
+    var showStartTimePicker by remember { mutableStateOf(false) }
+    var showEndTimePicker by remember { mutableStateOf(false) }
+
+    if (showStartTimePicker) {
+        BedtimeTimePickerDialog(
+            title = "Set Bedtime Start",
+            initialHour = bedtimeStartHour,
+            initialMinute = bedtimeStartMinute,
+            onConfirm = { h, m -> viewModel.setBedtimeStart(h, m) },
+            onDismiss = { showStartTimePicker = false },
+        )
+    }
+
+    if (showEndTimePicker) {
+        BedtimeTimePickerDialog(
+            title = "Set Bedtime End",
+            initialHour = bedtimeEndHour,
+            initialMinute = bedtimeEndMinute,
+            onConfirm = { h, m -> viewModel.setBedtimeEnd(h, m) },
+            onDismiss = { showEndTimePicker = false },
+        )
+    }
 
     Column(
         modifier = modifier
@@ -334,6 +368,36 @@ fun SettingsScreen(
             )
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Voice TTS (Backlog B5)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Voice speech output (TTS)",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Speaks responses aloud with emotional voice inflection and late-night calm pitch",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Switch(
+                checked = voiceTts,
+                onCheckedChange = viewModel::toggleVoiceTts,
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
         HorizontalDivider(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
@@ -379,6 +443,70 @@ fun SettingsScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Bedtime start picker
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showStartTimePicker = true }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Bedtime start",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Night guardian & binge-block active from %02d:%02d".format(bedtimeStartHour, bedtimeStartMinute),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            FilledTonalButton(
+                onClick = { showStartTimePicker = true },
+            ) {
+                Text("%02d:%02d".format(bedtimeStartHour, bedtimeStartMinute))
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Bedtime end picker
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { showEndTimePicker = true }
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Bedtime end",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Morning wake time at %02d:%02d".format(bedtimeEndHour, bedtimeEndMinute),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            FilledTonalButton(
+                onClick = { showEndTimePicker = true },
+            ) {
+                Text("%02d:%02d".format(bedtimeEndHour, bedtimeEndMinute))
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
         HorizontalDivider(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
@@ -409,7 +537,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    text = "Version 0.86.0",
+                    text = "Version ${com.shiina.mobile.BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -417,5 +545,66 @@ fun SettingsScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedButton(
+            onClick = onReplayOnboarding,
+            modifier = Modifier.fillMaxWidth(),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        ) {
+            Text("Replay Guided Setup Tour")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BedtimeTimePickerDialog(
+    title: String,
+    initialHour: Int,
+    initialMinute: Int,
+    onConfirm: (Int, Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val timePickerState = rememberTimePickerState(
+        initialHour = initialHour,
+        initialMinute = initialMinute,
+        is24Hour = true,
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            FilledTonalButton(
+                onClick = {
+                    onConfirm(timePickerState.hour, timePickerState.minute)
+                    onDismiss()
+                },
+            ) {
+                Text("Confirm")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        title = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                TimePicker(state = timePickerState)
+            }
+        },
+    )
 }

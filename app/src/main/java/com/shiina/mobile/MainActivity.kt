@@ -32,8 +32,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -42,11 +46,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
 import com.shiina.mobile.observation.CaptureConsent
 import com.shiina.mobile.observation.ObservationService
 import com.shiina.mobile.theme.CompanionTheme
+import com.shiina.mobile.ui.chat.ChatScreen
 import com.shiina.mobile.ui.character.CharacterPanel
 import com.shiina.mobile.ui.character.CharacterViewModel
+import com.shiina.mobile.ui.onboarding.OnboardingScreen
 import com.shiina.mobile.ui.permissions.hasAllPermissions
 import com.shiina.mobile.ui.settings.MemoryPanel
 import com.shiina.mobile.ui.settings.SettingsScreen
@@ -57,6 +64,21 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        /** Set by the overlay bubble tap (same process) to open the Chat tab. */
+        @Volatile var pendingTab: Int? = null
+    }
+
+    private fun applyPendingTab() {
+        pendingTab?.let {
+            requestedTab.intValue = it
+            pendingTab = null
+        }
+    }
+
+    /** Observed by MainAppScreen to switch tabs from outside the composition. */
+    private val requestedTab = androidx.compose.runtime.mutableIntStateOf(-1)
 
     private val notificationsPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -86,7 +108,7 @@ class MainActivity : ComponentActivity() {
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    SettingsViewModel(container.settingsRepository, container.keyStore, container.memoryStore, container.memoryContext) as T
+                    SettingsViewModel(container.settingsRepository, container.keyStore, container.memoryStore, container.memoryContext, container.learnedMemoryManager, container.proceduralMemoryStore) as T
             },
         )[SettingsViewModel::class.java]
         val characterVm = ViewModelProvider(
@@ -107,13 +129,35 @@ class MainActivity : ComponentActivity() {
         )[CharacterViewModel::class.java]
 
         setContent {
+            applyPendingTab()
             CompanionTheme {
-                MainAppScreen(
-                    characterVm = characterVm,
-                    settingsVm = settingsVm,
-                )
+                val onboardingCompleted by settingsVm.onboardingCompleted.collectAsState()
+                var replayOnboarding by remember { mutableStateOf(false) }
+
+                if (!onboardingCompleted || replayOnboarding) {
+                    OnboardingScreen(
+                        viewModel = settingsVm,
+                        onComplete = {
+                            replayOnboarding = false
+                            settingsVm.completeOnboarding()
+                        },
+                    )
+                } else {
+                    MainAppScreen(
+                        characterVm = characterVm,
+                        settingsVm = settingsVm,
+                        requestedTab = requestedTab,
+                        onReplayOnboarding = { replayOnboarding = true },
+                    )
+                }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Overlay bubble tap: bring the existing activity forward on the Chat tab.
+        applyPendingTab()
     }
 
     override fun onResume() {
@@ -121,7 +165,7 @@ class MainActivity : ComponentActivity() {
         val container = (application as CompanionApp).container
         runCatching { container.userActivityTracker.recordActivity() }
         // Screenshot toggle on but no projection yet -> ask for capture consent once.
-        CoroutineScope(Dispatchers.Main).launch {
+        lifecycleScope.launch {
             val enabled = runCatching {
                 container.settingsRepository.screenshotEnabled.first()
             }.getOrDefault(false)
@@ -135,7 +179,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         val container = (application as CompanionApp).container
-        CoroutineScope(Dispatchers.IO).launch {
+        lifecycleScope.launch(Dispatchers.IO) {
             runCatching { container.memoryConsolidator.consolidate() }
         }
     }
@@ -146,8 +190,14 @@ class MainActivity : ComponentActivity() {
 private fun MainAppScreen(
     characterVm: CharacterViewModel,
     settingsVm: SettingsViewModel,
+    requestedTab: androidx.compose.runtime.IntState,
+    onReplayOnboarding: () -> Unit = {},
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val reqTab by requestedTab
+    LaunchedEffect(reqTab) {
+        if (reqTab in 0..3) selectedTab = reqTab
+    }
     val context = LocalContext.current
     val allPermissionsGranted = hasAllPermissions(context)
 
@@ -163,7 +213,7 @@ private fun MainAppScreen(
                 },
                 actions = {
                     if (!allPermissionsGranted) {
-                        IconButton(onClick = { selectedTab = 2 }) {
+                        IconButton(onClick = { selectedTab = 3 }) {
                             Icon(
                                 imageVector = Icons.Default.Warning,
                                 contentDescription = "Permissions needed",
@@ -208,6 +258,25 @@ private fun MainAppScreen(
                     onClick = { selectedTab = 1 },
                     icon = {
                         Icon(
+                            imageVector = Icons.Default.Face,
+                            contentDescription = "Chat",
+                        )
+                    },
+                    label = { Text("Chat") },
+                    colors = NavigationBarItemDefaults.colors(
+                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.primary,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
+
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = {
+                        Icon(
                             imageVector = Icons.Default.DateRange,
                             contentDescription = "Memory",
                         )
@@ -223,8 +292,8 @@ private fun MainAppScreen(
                 )
 
                 NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
                     icon = {
                         if (!allPermissionsGranted) {
                             BadgedBox(
@@ -265,8 +334,9 @@ private fun MainAppScreen(
         ) {
             when (selectedTab) {
                 0 -> CharacterPanel(viewModel = characterVm)
-                1 -> MemoryPanel(viewModel = settingsVm)
-                2 -> SettingsScreen(viewModel = settingsVm)
+                1 -> ChatScreen()
+                2 -> MemoryPanel(viewModel = settingsVm)
+                3 -> SettingsScreen(viewModel = settingsVm, onReplayOnboarding = onReplayOnboarding)
             }
         }
     }

@@ -27,7 +27,7 @@ class MoodEngine(private val dao: MoodStateDao) {
 
     enum class Event {
         USER_TALK, DISMISSED, TALKED_BACK, ACTED, NEGLECT,
-        PRAISE, COMPLAINT, MUSIC_PLAYING, LATE_NIGHT, LOW_BATTERY, BOOT,
+        PRAISE, COMPLAINT, MUSIC_PLAYING, LATE_NIGHT, LOW_BATTERY, BOOT, MORNING,
     }
 
     private data class Anchor(val mood: String, val v: Double, val a: Double)
@@ -58,12 +58,17 @@ class MoodEngine(private val dao: MoodStateDao) {
 
     suspend fun currentMood(): String = current().mood
 
-    /** User spoke: attention boost + light keyword sentiment scan. */
+    /** User spoke: attention boost + light keyword sentiment scan + time-of-day awareness. */
     suspend fun applyUserText(text: String) {
         val t = text.lowercase()
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val isLateNight = hour in 23..24 || hour in 0..4
+        val isMorning = hour in 5..10
         when {
             PRAISE_WORDS.any { it in t } -> applyEvent(Event.PRAISE, "praise")
             COMPLAINT_WORDS.any { it in t } -> applyEvent(Event.COMPLAINT, "complaint")
+            isLateNight -> applyEvent(Event.LATE_NIGHT, "late night active")
+            isMorning -> applyEvent(Event.MORNING, "morning chat")
             else -> applyEvent(Event.USER_TALK, "talk")
         }
     }
@@ -80,13 +85,14 @@ class MoodEngine(private val dao: MoodStateDao) {
             Event.DISMISSED -> -0.20 to -0.05
             Event.TALKED_BACK -> 0.10 to 0.05
             Event.ACTED -> 0.18 to 0.02
-            Event.NEGLECT -> -0.30 to 0.10
+            Event.NEGLECT -> -0.35 to 0.20
             Event.PRAISE -> 0.25 to 0.10
             Event.COMPLAINT -> -0.25 to 0.12
             Event.MUSIC_PLAYING -> 0.05 to 0.03
-            Event.LATE_NIGHT -> -0.08 to 0.06
-            Event.LOW_BATTERY -> -0.05 to 0.10
+            Event.LATE_NIGHT -> -0.25 to 0.22
+            Event.LOW_BATTERY -> -0.08 to 0.12
             Event.BOOT -> 0.05 to 0.05
+            Event.MORNING -> 0.22 to 0.06
         }
         shift(dv, da, note.ifEmpty { event.name.lowercase() })
     }

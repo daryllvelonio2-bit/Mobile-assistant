@@ -64,10 +64,9 @@ class ScreenshotTaker(
                     screenMetrics?.updateFromBitmap(bitmap)
                     val dir = File(context.filesDir, "captures").apply { mkdirs() }
                     val out = File(dir, "cap_${System.currentTimeMillis()}_$reason.jpg")
-                    out.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+                    saveOptimizedJpeg(bitmap, out, "$reason via Accessibility")
                     bitmap.recycle()
                     prune(dir)
-                    AppDebugServer.log("CAPTURE", "Saved ${out.name} ($reason via Accessibility)")
                     return@withContext out
                 }
             }
@@ -115,10 +114,9 @@ class ScreenshotTaker(
                 screenMetrics?.updateFromBitmap(cropped)
                 val dir = File(context.filesDir, "captures").apply { mkdirs() }
                 val out = File(dir, "cap_${System.currentTimeMillis()}_$reason.jpg")
-                out.outputStream().use { cropped.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+                saveOptimizedJpeg(cropped, out, reason)
                 cropped.recycle()
                 prune(dir)
-                AppDebugServer.log("CAPTURE", "Saved ${out.name} ($reason)")
                 return out
             } finally {
                 image.close()
@@ -127,6 +125,32 @@ class ScreenshotTaker(
             runCatching { display.release() }
             runCatching { reader.close() }
         }
+    }
+
+    /**
+     * Downscales the screenshot for AI vision to max dimension 1024 (saving ~75% vision tokens
+     * and ~90% file size) while preserving crisp text readability for OCR and grounding.
+     */
+    private fun saveOptimizedJpeg(bitmap: Bitmap, outFile: File, reason: String) {
+        val maxDim = 1024
+        val w = bitmap.width
+        val h = bitmap.height
+        val scaled = if (maxOf(w, h) > maxDim) {
+            val scale = maxDim.toFloat() / maxOf(w, h)
+            val targetW = (w * scale).toInt().coerceAtLeast(1)
+            val targetH = (h * scale).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+        } else {
+            bitmap
+        }
+        outFile.outputStream().use { fos ->
+            scaled.compress(Bitmap.CompressFormat.JPEG, 75, fos)
+        }
+        val bytes = outFile.length()
+        if (scaled !== bitmap) {
+            scaled.recycle()
+        }
+        AppDebugServer.log("CAPTURE", "Saved ${outFile.name} (${bytes / 1024}KB, ${w}x${h} -> ${scaled.width}x${scaled.height}, reason=$reason)")
     }
 
     private fun prune(dir: File) {

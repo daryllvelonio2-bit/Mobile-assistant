@@ -16,6 +16,11 @@ class UserActivityTracker(context: Context) {
 
     fun recordActivity() {
         val now = System.currentTimeMillis()
+        val currentLast = prefs.getLong(KEY_LAST_ACTIVE, 0L)
+        // If currentLast is older than 5 seconds, preserve it as previous active timestamp
+        if (currentLast > 0L && (now - currentLast) > 5_000L) {
+            prefs.edit().putLong(KEY_PREV_ACTIVE, currentLast).apply()
+        }
         prefs.edit().putLong(KEY_LAST_ACTIVE, now).apply()
         runCatching {
             val day = (now / 86_400_000L).toInt()
@@ -37,8 +42,15 @@ class UserActivityTracker(context: Context) {
     }.getOrDefault(emptyMap())
 
     fun getLastActiveMillis(fallback: Long = 0L): Long {
-        val saved = prefs.getLong(KEY_LAST_ACTIVE, 0L)
-        return if (saved > 0L) saved else fallback
+        val now = System.currentTimeMillis()
+        val last = prefs.getLong(KEY_LAST_ACTIVE, 0L)
+        // If last active was recorded just milliseconds ago (as part of handling the current turn),
+        // use the previous active timestamp so the duration represents the user's actual absence!
+        if (last > 0L && (now - last) < 5_000L) {
+            val prev = prefs.getLong(KEY_PREV_ACTIVE, 0L)
+            if (prev > 0L) return prev
+        }
+        return if (last > 0L) last else fallback
     }
 
     fun getHoursSinceLastActive(fallback: Long = 0L): Double {
@@ -54,6 +66,7 @@ class UserActivityTracker(context: Context) {
 
     companion object {
         private const val KEY_LAST_ACTIVE = "last_user_active_millis"
+        private const val KEY_PREV_ACTIVE = "prev_user_active_millis"
         private const val KEY_HOURS = "active_hour_histogram"
         const val POUTY_THRESHOLD_HOURS = 10.0
     }

@@ -13,6 +13,7 @@ import com.shiina.mobile.data.db.MIGRATION_6_7
 import com.shiina.mobile.data.db.MIGRATION_7_8
 import com.shiina.mobile.data.db.MIGRATION_8_9
 import com.shiina.mobile.data.db.MIGRATION_9_10
+import com.shiina.mobile.data.db.MIGRATION_10_11
 import com.shiina.mobile.data.security.KeyStoreKeys
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.action.ActionExecutor
@@ -45,6 +46,7 @@ class AppContainer(context: Context) {
                 MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
                 MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10,
+                MIGRATION_10_11,
             )
             .build()
     }
@@ -63,10 +65,14 @@ class AppContainer(context: Context) {
 
     val deviceSenses: DeviceSenses by lazy { DeviceSenses(appContext, musicTracker, screenMetrics) }
 
-    val pageReader: PageReader by lazy { PageReader() }
+    val pageReader: PageReader by lazy { PageReader(httpClient) }
 
     val reminderScheduler: ReminderScheduler by lazy {
         ReminderScheduler(appContext, database.reminderDao())
+    }
+
+    val triggerScheduler: com.shiina.mobile.action.TriggerScheduler by lazy {
+        com.shiina.mobile.action.TriggerScheduler(appContext, database.triggerDao())
     }
 
     val memoryEpisodeDao by lazy { database.memoryEpisodeDao() }
@@ -97,6 +103,18 @@ class AppContainer(context: Context) {
 
     val learnedMemoryManager: com.shiina.mobile.memory.LearnedMemoryManager by lazy {
         com.shiina.mobile.memory.LearnedMemoryManager(appContext, memoryStore)
+    }
+
+    val dynamicLearningEngine: com.shiina.mobile.memory.DynamicLearningEngine by lazy {
+        com.shiina.mobile.memory.DynamicLearningEngine(appContext, memoryStore, learnedMemoryManager)
+    }
+
+    val proceduralMemoryStore: com.shiina.mobile.memory.ProceduralMemoryStore by lazy {
+        com.shiina.mobile.memory.ProceduralMemoryStore(appContext)
+    }
+
+    val voiceSpeaker: com.shiina.mobile.character.ShiinaVoiceSpeaker by lazy {
+        com.shiina.mobile.character.ShiinaVoiceSpeaker(appContext)
     }
 
     val memoryContext: MemoryContext by lazy {
@@ -144,7 +162,13 @@ class AppContainer(context: Context) {
         KeyStoreKeys(appContext)
     }
 
-    private val httpClient: OkHttpClient by lazy { OkHttpClient() }
+    val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
 
     val geminiKeyPool: RoundRobinKeyPool by lazy {
         RoundRobinKeyPool { keyStore.getKeys("gemini") }
@@ -184,7 +208,8 @@ class AppContainer(context: Context) {
         ActionExecutor(
             appContext, settingsRepository, database.goalDao(),
             memoryOutcomes, memoryStore, screenshotTaker, webSearch,
-            pageReader, reminderScheduler, toolTracker, memoryEpisodeDao,
+            pageReader, reminderScheduler, triggerScheduler, toolTracker,
+            memoryEpisodeDao,
             deviceActionController,
         )
     }
@@ -193,5 +218,5 @@ class AppContainer(context: Context) {
         ScreenshotTaker(appContext, screenMetrics)
     }
 
-    val webSearch: WebSearch by lazy { WebSearch() }
+    val webSearch: WebSearch by lazy { WebSearch(httpClient) }
 }

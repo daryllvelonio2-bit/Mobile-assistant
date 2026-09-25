@@ -13,8 +13,12 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 74
-        versionName = "0.74.0"
+        versionCode = 102
+        versionName = "0.102.0"
+        ndk {
+            // sherpa-onnx ships arm64 + arm32; arm64-only keeps the APK lean (JNY-LX1 is arm64).
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -36,6 +40,10 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -43,15 +51,18 @@ tasks.matching { it.name == "assembleDebug" }.configureEach {
     doLast {
         val apkFile = file("${project.layout.buildDirectory.get()}/outputs/apk/debug/app-debug.apk")
         if (apkFile.exists()) {
-            val destDir = file("/home/janelle/Downloads")
-            if (!destDir.exists()) destDir.mkdirs()
-            apkFile.copyTo(file("${destDir}/shiina-debug.apk"), overwrite = true)
-            println("Successfully copied APK to ${destDir}/shiina-debug.apk")
+            val destPath = System.getenv("APK_COPY_DIR") ?: (System.getProperty("user.home") + "/Downloads")
+            val destDir = file(destPath)
+            if (destDir.exists() || destDir.mkdirs()) {
+                apkFile.copyTo(file("${destDir}/shiina-debug.apk"), overwrite = true)
+                println("Successfully copied APK to ${destDir}/shiina-debug.apk")
+            }
         }
     }
 }
 
 dependencies {
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -75,4 +86,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.work.runtime)
     implementation(libs.health.connect.client)
+    implementation(libs.sceneform)
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20231013")
 }

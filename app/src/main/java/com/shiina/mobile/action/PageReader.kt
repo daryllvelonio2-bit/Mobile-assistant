@@ -16,9 +16,9 @@ import java.util.concurrent.TimeUnit
  * a huge page can't blow the heap.
  * Returns clean text (2500 chars max) or "" on any failure.
  */
-class PageReader {
+class PageReader(client: OkHttpClient? = null) {
 
-    private val http = OkHttpClient.Builder()
+    private val http = (client?.newBuilder() ?: OkHttpClient.Builder())
         .callTimeout(15, TimeUnit.SECONDS)
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(12, TimeUnit.SECONDS)

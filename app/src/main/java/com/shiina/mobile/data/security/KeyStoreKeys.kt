@@ -9,14 +9,19 @@ import androidx.security.crypto.MasterKey
 class KeyStoreKeys(context: Context) {
 
     private val prefs: SharedPreferences by lazy {
-        val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        EncryptedSharedPreferences.create(
-            context,
-            "api_keys",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+        runCatching {
+            val masterKey = MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            EncryptedSharedPreferences.create(
+                context,
+                "api_keys",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }.getOrElse { error ->
+            android.util.Log.e("KeyStoreKeys", "EncryptedSharedPreferences failed, falling back to private prefs", error)
+            context.getSharedPreferences("api_keys_fallback", Context.MODE_PRIVATE)
+        }
     }
 
     fun getKeys(provider: String = "gemini"): List<String> =

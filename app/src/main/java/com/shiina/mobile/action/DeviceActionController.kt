@@ -1,10 +1,14 @@
 package com.shiina.mobile.action
 
 import android.app.SearchManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.session.MediaSessionManager
@@ -12,7 +16,9 @@ import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.AlarmClock
 import android.provider.MediaStore
+import android.provider.Settings
 import android.view.KeyEvent
 import com.shiina.mobile.debug.AppDebugServer
 import com.shiina.mobile.observation.MusicNotificationListener
@@ -584,6 +590,25 @@ class DeviceActionController(
         val target = query.lowercase().trim()
         if (target.isBlank()) return JSONObject().put("tool", "OPEN_APP").put("success", false).put("message", "no app name specified").toString()
         AppDebugServer.log("ACTION", "Executing OPEN_APP: $target")
+
+        // 0. Direct system action intents for well-known feature targets
+        when (target) {
+            "alarm", "alarms" -> {
+                val intent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "OPEN_APP").put("app", "Alarm Clock").put("success", true).toString()
+                }
+            }
+            "timer", "timers" -> {
+                val intent = Intent(AlarmClock.ACTION_SHOW_TIMERS).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                if (intent.resolveActivity(context.packageManager) != null) {
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "OPEN_APP").put("app", "Timer").put("success", true).toString()
+                }
+            }
+        }
+
         val pm = context.packageManager
         val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
 
@@ -612,7 +637,38 @@ class DeviceActionController(
             }
         }
 
-        // 3. Fallback partial package match (e.g. "com.spotify.music" matches "spotify")
+        // 3. System alias mapping for common apps
+        val aliasKeywords = when (target) {
+            "clock", "alarm", "alarms", "timer", "stopwatch" -> listOf("deskclock", "clock")
+            "calculator", "calc" -> listOf("calculator", "calc")
+            "gallery", "photos" -> listOf("gallery", "photos")
+            "camera" -> listOf("camera")
+            "messages", "sms" -> listOf("mms", "messaging", "message")
+            "phone", "dialer", "call" -> listOf("dialer", "phone")
+            "contacts" -> listOf("contacts")
+            "browser", "chrome", "internet" -> listOf("chrome", "browser")
+            "files", "file manager" -> listOf("filemanager", "files", "documentsui")
+            "notes", "notepad" -> listOf("notepad", "notes")
+            "music" -> listOf("music", "spotify")
+            else -> emptyList()
+        }
+        if (aliasKeywords.isNotEmpty()) {
+            val aliasPkg = packages.firstOrNull { pkg ->
+                val pName = pkg.packageName.lowercase()
+                val lbl = pm.getApplicationLabel(pkg).toString().lowercase()
+                aliasKeywords.any { kw -> pName.contains(kw) || lbl.contains(kw) }
+            }
+            if (aliasPkg != null) {
+                val intent = pm.getLaunchIntentForPackage(aliasPkg.packageName)
+                if (intent != null) {
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(intent)
+                    return JSONObject().put("tool", "OPEN_APP").put("app", pm.getApplicationLabel(aliasPkg).toString()).put("package", aliasPkg.packageName).put("success", true).toString()
+                }
+            }
+        }
+
+        // 4. Fallback partial package match (e.g. "com.spotify.music" matches "spotify")
         val pkgMatch = packages.firstOrNull { it.packageName.lowercase().contains(target) }
         if (pkgMatch != null) {
             val intent = pm.getLaunchIntentForPackage(pkgMatch.packageName)
@@ -623,7 +679,18 @@ class DeviceActionController(
             }
         }
 
-        return JSONObject().put("tool", "OPEN_APP").put("app", target).put("success", false).put("message", "could not find app matching \"$target\"").toString()
+        // 5. Build an array of up to 15 installed app names to feed back so Shiina knows what is available
+        val availableNames = packages.mapNotNull { 
+            val label = pm.getApplicationLabel(it).toString()
+            if ((it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 && pm.getLaunchIntentForPackage(it.packageName) != null) label else null
+        }.take(15)
+
+        return JSONObject()
+            .put("tool", "OPEN_APP")
+            .put("app", target)
+            .put("success", false)
+            .put("message", "Could not find app matching \"$target\". (Note: try using LIST_APPS tool first if unsure of the name. Available non-system apps include: ${availableNames.joinToString(", ")})")
+            .toString()
     }
 
     /**
@@ -663,8 +730,8 @@ class DeviceActionController(
      * 2. text: Matches text in accessibility node hierarchy with physical tap fallback.
      * 3. coordinates (x, y): Normalized (0..1000) or physical screen pixels.
      */
-    suspend fun tapScreen(x: Float, y: Float, text: String = "", elementId: Int = -1): String {
-        AppDebugServer.log("ACTION", "Executing TAP_SCREEN: elementId=$elementId, text='$text', x=$x, y=$y")
+    suspend fun tapScreen(x: Float, y: Float, text: String = "", elementId: Int = -1, isLongPress: Boolean = false): String {
+        AppDebugServer.log("ACTION", "Executing TAP_SCREEN: elementId=$elementId, text='$text', x=$x, y=$y, isLongPress=$isLongPress")
         val service = ShiinaAccessibilityService.instance
         val metrics = screenMetrics ?: com.shiina.mobile.observation.ScreenMetrics(context)
 
@@ -686,12 +753,12 @@ class DeviceActionController(
         if (x >= 0f && y >= 0f) {
             val (targetX, targetY) = metrics.toPixels(x, y)
             if (service != null) {
-                val tapped = service.tap(targetX, targetY)
+                val tapped = if (isLongPress) service.longPress(targetX, targetY) else service.tap(targetX, targetY)
                 if (tapped) {
                     return JSONObject()
                         .put("tool", "TAP_SCREEN")
                         .put("success", true)
-                        .put("method", "accessibility_gesture")
+                        .put("method", if (isLongPress) "accessibility_long_press" else "accessibility_gesture")
                         .put("target_x", targetX)
                         .put("target_y", targetY)
                         .put("raw_x", x)
@@ -841,22 +908,45 @@ class DeviceActionController(
     }
 
     /**
-     * Performs a global key/navigation action (back, home).
+     * Clears text from the currently focused input field.
+     */
+    fun clearText(): String {
+        AppDebugServer.log("ACTION", "Executing CLEAR_TEXT")
+        val service = ShiinaAccessibilityService.instance
+        if (service != null && service.clearInputText()) {
+            return JSONObject().put("tool", "CLEAR_TEXT").put("success", true).toString()
+        }
+        val shellOk = runCatching {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "input keyevent --longpress 67"))
+            p.waitFor() == 0
+        }.getOrDefault(false)
+        return JSONObject().put("tool", "CLEAR_TEXT").put("success", shellOk).toString()
+    }
+
+    /**
+     * Performs a global key/navigation action (back, home, recents, notifications, quick_settings, enter, search, volume).
      */
     fun pressKey(action: String): String {
         AppDebugServer.log("ACTION", "Executing PRESS_KEY: '$action'")
+        val act = action.lowercase().trim()
         val service = ShiinaAccessibilityService.instance
         if (service != null) {
-            val ok = service.pressGlobal(action)
+            val ok = service.pressGlobal(act)
             if (ok) {
                 return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", true).toString()
             }
         }
 
-        val keycode = when (action.lowercase().trim()) {
-            "back" -> 4
+        val keycode = when (act) {
+            "back", "dismiss_keyboard", "hide_keyboard" -> 4
             "home" -> 3
+            "recents", "app_switch" -> 187
+            "notifications", "notification_shade" -> 83
             "enter", "search" -> 66
+            "volume_up", "vol_up" -> 24
+            "volume_down", "vol_down" -> 25
+            "volume_mute", "mute" -> 164
+            "lock_screen", "power", "lock" -> 26
             else -> 4
         }
         val shellOk = runCatching {
@@ -867,6 +957,313 @@ class DeviceActionController(
             return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", true).put("method", "shell").toString()
         }
 
-        return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", false).put("error", "Could not press key. Enable Accessibility Service.").toString()
+        return JSONObject().put("tool", "PRESS_KEY").put("action", action).put("success", false).put("error", "Could not press key '$action'. Enable Accessibility Service.").toString()
+    }
+
+    /**
+     * Toggles the device camera flashlight / torch on or off.
+     */
+    fun toggleFlashlight(action: String = ""): String {
+        return runCatching {
+            val cm = context.getSystemService(CameraManager::class.java)
+                ?: return "Camera service unavailable"
+            val cameraId = cm.cameraIdList.firstOrNull { id ->
+                val chars = cm.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: return "No camera flash found on device"
+
+            val target = when (action.lowercase().trim()) {
+                "off", "false", "disable" -> false
+                else -> true
+            }
+            cm.setTorchMode(cameraId, target)
+            "flashlight turned ${if (target) "on" else "off"}"
+        }.getOrElse { "flashlight toggle failed: ${it.message}" }
+    }
+
+    /**
+     * Launches Android system settings panels directly.
+     */
+    fun openSettings(panel: String = ""): String {
+        return runCatching {
+            val intentAction = when (panel.lowercase().trim()) {
+                "wifi", "network", "internet" -> Settings.ACTION_WIFI_SETTINGS
+                "bluetooth", "bt" -> Settings.ACTION_BLUETOOTH_SETTINGS
+                "display", "screen" -> Settings.ACTION_DISPLAY_SETTINGS
+                "sound", "volume", "audio" -> Settings.ACTION_SOUND_SETTINGS
+                "battery", "power" -> Intent.ACTION_POWER_USAGE_SUMMARY
+                "apps", "applications" -> Settings.ACTION_APPLICATION_SETTINGS
+                "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS
+                "date", "time" -> Settings.ACTION_DATE_SETTINGS
+                "privacy", "security" -> Settings.ACTION_PRIVACY_SETTINGS
+                else -> Settings.ACTION_SETTINGS
+            }
+            val intent = Intent(intentAction).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            "opened settings (${panel.ifBlank { "main" }})"
+        }.getOrElse { "failed to open settings: ${it.message}" }
+    }
+
+    /**
+     * Opens a web URL directly in the user's default web browser.
+     */
+    fun openUrl(url: String): String {
+        return runCatching {
+            val trimmed = url.trim()
+            val targetUrl = if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+                "https://$trimmed"
+            } else trimmed
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            "opened url in browser: $targetUrl"
+        }.getOrElse { "failed to open url: ${it.message}" }
+    }
+
+    /**
+     * Reads or copies text to the Android system clipboard.
+     */
+    fun manageClipboard(action: String, text: String = ""): String {
+        return runCatching {
+            val cm = context.getSystemService(ClipboardManager::class.java)
+                ?: return "Clipboard service unavailable"
+            when (action.lowercase().trim()) {
+                "copy", "set", "write" -> {
+                    val clip = ClipData.newPlainText("Shiina", text)
+                    cm.setPrimaryClip(clip)
+                    "copied to clipboard: \"${text.take(60)}\""
+                }
+                "read", "get", "paste" -> {
+                    val item = cm.primaryClip?.getItemAt(0)
+                    val content = item?.text?.toString().orEmpty()
+                    if (content.isNotBlank()) "clipboard contains: \"${content.take(200)}\""
+                    else "clipboard is empty"
+                }
+                else -> "clipboard action must be 'copy' or 'read'"
+            }
+        }.getOrElse { "clipboard failed: ${it.message}" }
+    }
+
+    /**
+     * Dispatches common system intents: dialer, maps, camera, clock, share.
+     */
+    fun systemIntent(action: String, data: String = ""): String {
+        return runCatching {
+            val intent = when (action.lowercase().trim()) {
+                "dial", "call", "phone" -> {
+                    val num = data.trim().filter { it.isDigit() || it == '+' || it == '#' || it == '*' }
+                    Intent(Intent.ACTION_DIAL, Uri.parse("tel:$num"))
+                }
+                "maps", "navigate", "location" -> {
+                    val q = Uri.encode(data.trim())
+                    Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q"))
+                }
+                "camera", "photo" -> {
+                    Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+                }
+                "clock", "alarm" -> {
+                    Intent(AlarmClock.ACTION_SHOW_ALARMS)
+                }
+                "share" -> {
+                    Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, data.trim())
+                    }
+                }
+                else -> return "unknown system intent: $action (supported: dial, maps, camera, clock, share)"
+            }.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            "launched system action: $action"
+        }.getOrElse { "system action '$action' failed: ${it.message}" }
+    }
+
+    /**
+     * Detects and returns the active foreground application.
+     */
+    fun getForegroundApp(): String {
+        val a11yPkg = ShiinaAccessibilityService.instance?.getCurrentPackageName()
+        val pkg = if (!a11yPkg.isNullOrBlank()) a11yPkg else {
+            val usm = context.getSystemService(android.app.usage.UsageStatsManager::class.java)
+            val end = System.currentTimeMillis()
+            val stats = usm?.queryUsageStats(android.app.usage.UsageStatsManager.INTERVAL_DAILY, end - 60_000, end)
+            stats?.filter { it.lastTimeUsed > end - 60_000 }?.maxByOrNull { it.lastTimeUsed }?.packageName
+        }
+        val pm = context.packageManager
+        val appName = if (pkg != null) {
+            runCatching {
+                val appInfo = pm.getApplicationInfo(pkg, 0)
+                pm.getApplicationLabel(appInfo).toString()
+            }.getOrDefault(pkg)
+        } else "Unknown"
+
+        return JSONObject()
+            .put("tool", "GET_FOREGROUND_APP")
+            .put("success", pkg != null)
+            .put("package_name", pkg ?: "unknown")
+            .put("app_name", appName)
+            .toString()
+    }
+
+    /**
+     * Reads all visible text content from the current screen hierarchy.
+     */
+    fun readScreenText(): String {
+        val service = ShiinaAccessibilityService.instance
+        if (service == null) {
+            return JSONObject()
+                .put("tool", "READ_SCREEN_TEXT")
+                .put("success", false)
+                .put("error", "Accessibility service not active")
+                .toString()
+        }
+        val text = service.getVisibleScreenText()
+        return JSONObject()
+            .put("tool", "READ_SCREEN_TEXT")
+            .put("success", text.isNotBlank())
+            .put("content", text.ifBlank { "No text detected on screen" })
+            .put("chars", text.length)
+            .toString()
+    }
+
+    /**
+     * Sets the system ringer mode (normal, vibrate, silent).
+     */
+    fun setRingerMode(mode: String): String {
+        return runCatching {
+            val am = context.getSystemService(AudioManager::class.java)
+                ?: return "Audio service unavailable"
+            val target = when (mode.lowercase().trim()) {
+                "silent" -> AudioManager.RINGER_MODE_SILENT
+                "vibrate" -> AudioManager.RINGER_MODE_VIBRATE
+                else -> AudioManager.RINGER_MODE_NORMAL
+            }
+            am.ringerMode = target
+            "ringer mode set to $mode"
+        }.getOrElse { "set ringer mode failed: ${it.message}" }
+    }
+
+    /**
+     * Vibrates the physical device for haptic alerts.
+     */
+    fun vibrateDevice(durationMs: Long = 200): String {
+        return runCatching {
+            val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = context.getSystemService(android.os.VibratorManager::class.java)
+                vm?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+            if (v == null || !v.hasVibrator()) return "Device does not have vibrator"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(android.os.VibrationEffect.createOneShot(durationMs, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                v.vibrate(durationMs)
+            }
+            "vibrated device for ${durationMs}ms"
+        }.getOrElse { "vibrate failed: ${it.message}" }
+    }
+
+    /**
+     * Returns rich metadata about the currently playing audio or media stream.
+     */
+    fun getCurrentPlaying(): String {
+        val track = MusicTracker(context).getExactMusic()
+        val isPlaying = track?.isPlaying ?: (context.getSystemService(AudioManager::class.java)?.isMusicActive == true)
+        return JSONObject()
+            .put("tool", "GET_CURRENT_PLAYING")
+            .put("is_playing", isPlaying)
+            .put("title", track?.title ?: "none")
+            .put("artist", track?.artist ?: "none")
+            .put("album", track?.album ?: "")
+            .put("app", track?.app ?: "")
+            .toString()
+    }
+
+    /**
+     * Sets an Android alarm clock via standard system intent.
+     */
+    fun setAlarm(hour: Int, minute: Int, message: String = ""): String {
+        return runCatching {
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
+                putExtra(AlarmClock.EXTRA_HOUR, hour)
+                putExtra(AlarmClock.EXTRA_MINUTES, minute)
+                if (message.isNotBlank()) putExtra(AlarmClock.EXTRA_MESSAGE, message)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            "alarm set for %02d:%02d%s".format(hour, minute, if (message.isNotBlank()) " ($message)" else "")
+        }.getOrElse { err ->
+            runCatching {
+                val showIntent = Intent(AlarmClock.ACTION_SHOW_ALARMS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(showIntent)
+                "opened alarms screen (fallback): ${err.message}"
+            }.getOrElse { fallbackErr -> "failed to set alarm: ${err.message}; fallback: ${fallbackErr.message}" }
+        }
+    }
+
+    /**
+     * Sets an Android countdown timer via standard system intent.
+     */
+    fun setTimer(seconds: Int, message: String = ""): String {
+        return runCatching {
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+                if (message.isNotBlank()) putExtra(AlarmClock.EXTRA_MESSAGE, message)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, true)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            "timer set for ${seconds}s%s".format(if (message.isNotBlank()) " ($message)" else "")
+        }.getOrElse { err ->
+            runCatching {
+                val showIntent = Intent(AlarmClock.ACTION_SHOW_TIMERS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(showIntent)
+                "opened timers screen (fallback): ${err.message}"
+            }.getOrElse { fallbackErr -> "failed to set timer: ${err.message}; fallback: ${fallbackErr.message}" }
+        }
+    }
+
+    /**
+     * Sends a local status or alert notification to the Android notification drawer.
+     */
+    fun sendNotification(title: String, message: String): String {
+        return runCatching {
+            val nm = context.getSystemService(android.app.NotificationManager::class.java)
+                ?: return "Notification service unavailable"
+            val channelId = "shiina_assistant_alerts"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    channelId, "Shiina Alerts", android.app.NotificationManager.IMPORTANCE_DEFAULT
+                )
+                nm.createNotificationChannel(channel)
+            }
+            val notif = androidx.core.app.NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title.ifBlank { "Shiina" })
+                .setContentText(message)
+                .setAutoCancel(true)
+                .build()
+            nm.notify((System.currentTimeMillis() % 100000).toInt(), notif)
+            "notification posted: $title"
+        }.getOrElse { "failed to send notification: ${it.message}" }
+    }
+
+    /**
+     * Closes the active foreground application by navigating home.
+     */
+    fun closeApp(): String {
+        return pressKey("home")
     }
 }

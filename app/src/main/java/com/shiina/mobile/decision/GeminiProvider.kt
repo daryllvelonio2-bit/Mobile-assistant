@@ -108,7 +108,7 @@ class GeminiProvider(
             val files = dir.listFiles()?.filter { it.extension.lowercase() == "jpg" } ?: return null
             val newest = files.maxByOrNull { it.lastModified() } ?: return null
             val ageMs = System.currentTimeMillis() - newest.lastModified()
-            if (ageMs < 30 * 60 * 1000L) newest else null
+            if (ageMs < 60 * 1000L) newest else null
         }.getOrNull()
     }
 
@@ -125,7 +125,6 @@ class GeminiProvider(
                 ?.joinToString("; ") { it.title.take(30) }.orEmpty()
         }.getOrDefault("")
         return buildString {
-            appendLine("# Persona & Tone")
             appendLine(ShiinaPrompts.GLOBAL_RULES)
             appendLine(ShiinaPrompts.moodPrompt(mood))
             if (emotionBlock.isNotBlank()) appendLine(emotionBlock)
@@ -138,6 +137,7 @@ class GeminiProvider(
             appendLine("2. bedtime passed with active screen use, or")
             appendLine("3. a goal deadline is overdue or imminent while non-work apps are active.")
             appendLine("NEVER interrupt if the user is productive, within normal habits, or if you lack a concrete observation.")
+            appendLine("SLEEP-TIME STRICTNESS: if the current hour is within the learned bedtime window (see Best nudge hour / bedtime facts) or between 11pm and 6am with entertainment apps active and the screen on, raise the bar: use firm_warning tone, lower your spoken_message to a direct command to go to sleep, and you MAY interrupt even on a modest overage. Being late at night is not 'being productive'.")
             appendLine("When should_interrupt is false, spoken_message must be null.")
             appendLine("When should_interrupt is true, spoken_message must be a short, natural, friendly observation or question (1-2 sentences, <=140 chars).")
             appendLine("SCREENSHOT GROUNDING: if a screenshot is attached, observe only what is visible in it. If none is attached, do not guess screen contents.")
@@ -172,9 +172,10 @@ class GeminiProvider(
             appendLine("- Use HIDE to hide overlay;")
             appendLine("- Use SEARCH_WEB when external info is needed;")
             appendLine("- Use TAKE_SCREENSHOT when looking at the screen would answer a question;")
-            appendLine("- Use SET_REMINDER with parameters.text like 'remind me to X at 8pm'; LIST_REMINDERS to show pending reminders; CANCEL_REMINDER with the reminder id or text to cancel one;")
-            appendLine("- Use OPEN_APP with an app name, PLAY_MUSIC with a song, MEDIA_CONTROL with play/pause/next/prev, VOLUME_CONTROL with up/down/mute;")
+            appendLine("- Use SET_REMINDER with target reminder description and scheduled time in parameters.text; LIST_REMINDERS to show pending reminders; CANCEL_REMINDER with the identifier or description to cancel one;")
+            appendLine("- Use OPEN_APP with an app name, PLAY_MUSIC with an audio query, MEDIA_CONTROL with playback actions, VOLUME_CONTROL with level actions;")
             appendLine("- SET_REMINDER, LOG_GOAL, LEARN_FACT, REMEMBER, CHECK_GOALS and TAKE_SCREENSHOT may run even when should_interrupt is false — she does the chore silently.")
+            appendLine("- SET_TRIGGER arms a persistent overlay at a designated future time requiring direct user acknowledgment; LIST_TRIGGERS lists active triggers; CANCEL_TRIGGER cancels a trigger by identifier. Use these for scheduled accountability checkpoints.")
         }
     }
 
@@ -260,14 +261,19 @@ class GeminiProvider(
         }
         "REMEMBER" -> {
             val k = params?.optString("key", "")?.trim().orEmpty()
-            val v = params?.optString("text", "")?.trim()
-                .ifEmpty { params?.optString("value", "")?.trim() }.orEmpty()
+            val v = params?.optString("text", "")?.trim().orEmpty()
+                .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
             if (k.isNotEmpty()) "$k=$v" else v
         }
         "READ_URL" -> params?.optString("url", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
         "SET_REMINDER" -> params?.optString("text", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
+        "SET_TRIGGER" -> params?.optString("text", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("value", "")?.trim().orEmpty() }
+        "LIST_TRIGGERS" -> ""
+        "CANCEL_TRIGGER" -> params?.optString("value", "")?.trim().orEmpty()
+            .ifEmpty { params?.optString("text", "")?.trim().orEmpty() }
         "LIST_REMINDERS" -> ""
         "CANCEL_REMINDER" -> params?.optString("value", "")?.trim().orEmpty()
             .ifEmpty { params?.optString("text", "")?.trim().orEmpty() }

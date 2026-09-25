@@ -33,6 +33,10 @@ class AlarmReceiver : BroadcastReceiver() {
                             .onFailure { e ->
                                 AppDebugServer.log("ERROR", "Reminder restore failed: ${e.message}")
                             }
+                        runCatching { c.triggerScheduler.restorePending() }
+                            .onFailure { e ->
+                                AppDebugServer.log("ERROR", "Trigger restore failed: ${e.message}")
+                            }
                         runCatching { com.shiina.mobile.debug.DebugTalkService.start(context) }
                         AppDebugServer.log("ALARM", "Daily 7PM alarm rescheduled after boot")
                     }

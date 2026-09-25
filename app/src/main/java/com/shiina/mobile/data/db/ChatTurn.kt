@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * One Talk exchange turn (Phase 6 chat continuity).
@@ -28,6 +29,10 @@ interface ChatTurnDao {
 
     @Query("SELECT * FROM chat_turns ORDER BY id DESC LIMIT :limit")
     suspend fun latest(limit: Int): List<ChatTurn>
+
+    /** Live stream of the newest turns (descending; reverse for chronological UI). */
+    @Query("SELECT * FROM chat_turns ORDER BY id DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<ChatTurn>>
 
     @Query("SELECT COUNT(*) FROM chat_turns WHERE timestampMillis >= :startMillis AND timestampMillis < :endMillis")
     suspend fun countInRange(startMillis: Long, endMillis: Long): Int
@@ -56,12 +61,14 @@ class ChatHistory(
 ) {
     companion object {
         /**
-         * 100k context limit (approx 100,000 characters).
-         * Below this threshold, 100% of conversation turns are passed verbatim.
-         * Once reached, older turns are automatically compacted into a durable digest.
+         * Sliding prompt context window:
+         * All turns remain stored verbatim in SQLite Room DB permanently.
+         * To keep prompt tokens, latency, and radio/battery usage minimal,
+         * active conversation keeps ~15-20 recent turns verbatim, and older
+         * turns are distilled into the compacted summary digest.
          */
-        const val MAX_CONTEXT_CHARS = 100_000
-        const val RECENT_PRESERVE_CHARS = 40_000
+        const val MAX_CONTEXT_CHARS = 12_000
+        const val RECENT_PRESERVE_CHARS = 6_000
         const val FACT_COMPACTED_KEY = "chat_compacted_summary"
 
         private val TURN_DATE_FMT = java.text.SimpleDateFormat("yyyy-MM-dd h:mm a", java.util.Locale.getDefault())
@@ -72,6 +79,32 @@ class ChatHistory(
             } else ""
             return "$timePrefix${turn.role.replaceFirstChar { c -> c.uppercase() }}: ${turn.text}"
         }
+
+        fun formatDuration(diffMillis: Long): String {
+            val totalMinutes = (diffMillis / 60_000L).coerceAtLeast(1L)
+            val hours = totalMinutes / 60L
+            val minutes = totalMinutes % 60L
+            return when {
+                hours > 0L && minutes > 0L -> "${hours}h ${minutes}m"
+                hours > 0L -> "${hours} hour" + (if (hours > 1) "s" else "")
+                else -> "${minutes} minute" + (if (minutes > 1) "s" else "")
+            }
+        }
+
+        fun formatTurnsWithSessionBreaks(turns: List<ChatTurn>): String = buildString {
+            for (i in turns.indices) {
+                val curr = turns[i]
+                if (i > 0) {
+                    val prev = turns[i - 1]
+                    val gap = curr.timestampMillis - prev.timestampMillis
+                    if (gap >= 30 * 60 * 1000L) { // 30+ minutes gap indicates a session break
+                        appendLine()
+                        appendLine("--- [Session Break: ${formatDuration(gap)} later] ---")
+                    }
+                }
+                appendLine(formatTurn(curr))
+            }
+        }.trimEnd()
     }
 
     suspend fun addUser(text: String) = add("user", text)
@@ -92,6 +125,26 @@ class ChatHistory(
     suspend fun allTurns(): List<ChatTurn> = dao.all()
 
     /**
+     * Timestamp of the most recent turn in the database, or 0L if empty.
+     */
+    suspend fun lastTurnTimestamp(): Long {
+        return dao.latest(1).firstOrNull()?.timestampMillis ?: 0L
+    }
+
+    /**
+     * Timestamp of the most recent interaction BEFORE the current userText was received,
+     * or 0L if no previous turns exist.
+     */
+    suspend fun getPreviousTurnTimestamp(currentUserText: String? = null): Long {
+        val latest = dao.latest(2)
+        if (latest.isEmpty()) return 0L
+        if (currentUserText != null && latest[0].text == currentUserText && latest[0].role.equals("user", ignoreCase = true)) {
+            return if (latest.size > 1) latest[1].timestampMillis else 0L
+        }
+        return latest[0].timestampMillis
+    }
+
+    /**
      * Builds conversation history formatted for the prompt.
      * Returns all turns verbatim if within 100k context.
      * Auto-compacts older turns if 100k context is exceeded.
@@ -110,7 +163,7 @@ class ChatHistory(
         val savedDigest = runCatching { factDao?.get(FACT_COMPACTED_KEY)?.value }.getOrNull().orEmpty()
 
         if (totalChars <= MAX_CONTEXT_CHARS) {
-            val verbatim = turns.joinToString("\n") { formatTurn(it) }
+            val verbatim = formatTurnsWithSessionBreaks(turns)
             return if (savedDigest.isNotBlank()) {
                 "## Earlier Conversation (Compacted)\n$savedDigest\n\n## Active Conversation\n$verbatim"
             } else {
@@ -158,7 +211,7 @@ class ChatHistory(
             }
         }
 
-        val recentVerbatim = recentTurns.joinToString("\n") { formatTurn(it) }
+        val recentVerbatim = formatTurnsWithSessionBreaks(recentTurns)
 
         return buildString {
             if (newDigest.isNotBlank()) {

@@ -223,7 +223,7 @@ fun MemoryPanel(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Permanently clear all facts, episodes, and conversation context.",
+            text = "Permanently clear all facts, learned memory, procedures, episodes, and conversation context.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

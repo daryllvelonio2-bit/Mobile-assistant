@@ -36,11 +36,16 @@ data class Decision(
     companion object {
         val ALLOWED_TONES = setOf("neutral", "candid_direct", "firm_warning", "validating")
         val ALLOWED_ACTIONS = setOf(
-            "NONE", "SET_ALARM", "TOGGLE_SCREENSHOT", "LOG_GOAL",
-            "LEARN_FACT", "REMEMBER", "SEARCH_WEB", "TAKE_SCREENSHOT",
+            "NONE", "SET_ALARM", "SET_TIMER", "TOGGLE_SCREENSHOT", "LOG_GOAL",
+            "LEARN_FACT", "REMEMBER", "FORGET", "LIST_FACTS", "SEARCH_WEB", "TAKE_SCREENSHOT",
             "READ_URL", "CHECK_GOALS", "SET_REMINDER", "LIST_REMINDERS", "CANCEL_REMINDER", "COMPLETE_GOAL",
-            "HIDE", "SET_MODE", "MEDIA_CONTROL", "PLAY_MUSIC", "SEARCH_MUSIC", "VOLUME_CONTROL", "DEVICE_ACTION", "OPEN_APP",
-            "SEARCH_APP", "LIST_APPS", "GET_DEVICE_STATE",
+            "SET_TRIGGER", "LIST_TRIGGERS", "CANCEL_TRIGGER",
+            "HIDE", "SET_MODE", "MEDIA_CONTROL", "PLAY_MUSIC", "SEARCH_MUSIC", "GET_CURRENT_PLAYING",
+            "VOLUME_CONTROL", "SET_RINGER_MODE", "VIBRATE_DEVICE", "SEND_NOTIFICATION", "DEVICE_ACTION",
+            "OPEN_APP", "CLOSE_APP", "GET_FOREGROUND_APP", "SEARCH_APP", "LIST_APPS", "GET_DEVICE_STATE",
+            "OPEN_URL", "SYSTEM_INTENT", "INSPECT_SCREEN", "READ_SCREEN_TEXT",
+            "TAP_SCREEN", "SWIPE_SCREEN", "INPUT_TEXT", "CLEAR_TEXT", "PRESS_KEY", "WAIT",
+            "TOGGLE_FLASHLIGHT", "OPEN_SETTINGS", "MANAGE_CLIPBOARD",
         )
 
         /**
@@ -49,6 +54,7 @@ data class Decision(
          */
         val SILENT_ACTIONS = setOf(
             "LOG_GOAL", "LEARN_FACT", "REMEMBER", "SET_REMINDER", "LIST_REMINDERS",
+            "SET_TRIGGER", "LIST_TRIGGERS", "CANCEL_TRIGGER",
             "CHECK_GOALS", "TAKE_SCREENSHOT",
         )
 

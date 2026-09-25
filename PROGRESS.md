@@ -1,11 +1,194 @@
 # Project Progress (`PROGRESS.md`)
 
 ## Status Overview
-- **Current Phase:** Memory upgrade — Hermes-style learning + safe auto-compact (v0.24.0)
-- **Last Updated:** 2026-09-20
+- **Current Phase:** Master Plan: Personal Cognitive Companion & Usability Evolution (v0.103.0)
+- **Last Updated:** 2026-09-24
 - **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
+- **2026-09-22 — Zero-Shot Voice Clone, Clone-Only (v0.102.0):**
+  - New [`VoiceCloneEngine.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/VoiceCloneEngine.kt): sherpa-onnx ZipVoice distill-int8 + vocos_24khz, reference `files/clone/ref.wav` (15s) + `ref.txt` (exact transcript, base.en-verified). Clone-only routing (system TTS emergency fallback); Kokoro engine + its 150MB model removed to save space (same AAR reused, arm64-only).
+  - Pitfalls: `OfflineTtsZipVoiceModelConfig` (capital V); Python `generate(text, gen_config)`; vocoder lives in separate `vocoder-models` release; distill needs `num_steps=4`; reference text must match audio exactly.
+  - Verified on JNY-LX1: "Clone engine loaded", "Spoke 247154 samples @24000Hz", process stable; 14/14 unit tests pass.
+- **2026-09-22 — Kokoro Neural Voice, On-Device (v0.101.0, superseded by clone in v0.102.0):**
+  - New [`KokoroVoiceEngine.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/KokoroVoiceEngine.kt): sherpa-onnx 1.13.8 AAR (vendored `app/libs`, arm64-only) + Kokoro int8 English, default voice af_bella (sid 1, 11 speakers mapped). Offline synthesis → AudioTrack PCM16. Model (~150MB) lives in `files/kokoro/`, pushed via adb — never in git/APK, never on mobile data.
+  - [`ShiinaVoiceSpeaker`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/ShiinaVoiceSpeaker.kt) routes to Kokoro when ready, system TTS fallback otherwise; mood→speed mapping mirrors acoustics. `prewarmNeural()` at service start (DebugTalkService) so first reply speaks fast.
+  - Settings: `neural_voice_enabled` (default on) + `kokoro_speaker_id` (default 1).
+  - Pitfalls found live: OfflineTts MUST get null AssetManager for absolute paths (else native F-abort kills process); Huawei kills make chat-path verification flaky — verify via /api/events polls + screen-on.
+  - Verified on JNY-LX1: "Engine loaded (af_bella)", "Spoke 16537 samples @24000Hz", 14/14 unit tests pass.
+- **2026-09-22 — Shiina-CLI Prompt Transplant, Adapted On-Device (v0.100.0):**
+  - Ported the portable core of the Shiina CLI system prompt (`~/Downloads/shiina-cli-prompt/`) into [`ShiinaPrompts.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), rewritten so she knows she lives on the phone, not in a terminal:
+    - Direct Speech (SOUL port): reply length matches ask weight, finished tasks get short change-reports not process replays, no filler/restating/narrating tool calls.
+    - Earned Depth + Plain & Honest: brief by default, detail only when asked or results demand it; unsure said plainly.
+    - New `# Execution Discipline` section (CLI tool-use/finish/verify ports): act-don't-announce turns, finish-only-when-verified-on-device, verify-by-readback after state changes, blockers-over-fiction.
+  - Left out CLI-only machinery (terminal paths, profiles, cron, skill index, gateway) — nothing in the app prompt references Hermes.
+- **2026-09-22 — System Prompt Optimization: Assistant-First, Speak-Results & Shorter Context (v0.99.0):**
+  - **Goal Alignment ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt), `PROMPT_VERSION v8.1-assistant-grounded`)**:
+    - Identity block compressed with "Assistant first: helpful action over chatter" + Reply Length rule (short default matching user energy, expand only when asked).
+    - Added Favorites Relevance Rule (mention remembered favorites only when user reopens topic, related media is playing, or user asks) and Ask-First-When-Ambiguous rule (never guess/autoplay from memory).
+    - Screen-grounding section compressed ~40% with zero behavior loss; TOOL_SPEC message field now orders silent intermediate lookups + DONE messages that speak actual observed results (fixes list-titles bug); CONCLUDE step requires data-first messages.
+    - Compressed `TALK_DRIVE` (kept Fresh Session Etiquette + anti-drag lines verbatim).
+  - **Skills Compression ([ShiinaSkills.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaSkills.kt))**:
+    - All 7 playbooks compressed ~40% keeping every protocol and all test-anchored strings; added Ambiguous-Media ask-first (Skill 4) and Speak-the-Data (Skill 5).
+  - **Execution-State & Final Speech ([PromptAssembler.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/PromptAssembler.kt))**:
+    - DONE directive requires observed results in message; final-speech cap lifted to full list when user asked for one.
+  - **Scenario Shortening ([DynamicLearningEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/DynamicLearningEngine.kt))**:
+    - All 7 scenario strings shortened; all tags and test-anchored phrasing preserved.
+  - Pure system context stays above the 10k-char test floor.
+- **2026-09-22 — Conversational Session Boundaries & Anti-Clinging Prompt Refinement (v0.97.0):**
+  - **Conversational Session Boundaries & Anti-Clinging Directive ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - Added `# Conversational Session Boundaries & Temporal Recency Etiquette` to `GLOBAL_RULES`: explicitly defines that a gap of 30+ minutes or 1-2+ hours represents a fresh session where previous topics (music, tunes, apps, old chatter) are expired background context.
+    - Added Anti-Clinging & Topic Expiry rule: strictly forbids clinging to, obsessing over, or dragging up old topics when the user returns after a gap, unless the user specifically asks or resumes it.
+    - Added Natural Present-Moment Greetings rule: when the user returns and greets ("hello", "good afternoon", "hey", etc.), respond directly to their present greeting and time of day without dredging up past topics.
+    - Updated `TALK_DRIVE` with "Fresh Session Etiquette" and cleaned up context-weaving music references that prompted repetitive tune mentions.
+    - Updated `bootGreetingPrompt`: tailored greetings for returning users after an absence, eliminating repetitive music questions.
+  - **Session State & Gap Surfacing in Prompts ([PromptAssembler.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/PromptAssembler.kt))**:
+    - Calculates exact elapsed time since the previous turn (`lastInteractionMillis` / `getPreviousTurnTimestamp`).
+    - Appends clear `Conversational Recency: [NEW SESSION — User was offline/away for X, last active at Y]` directive directly into `# Live Context, Time & Session State`.
+  - **Session Break Markers in Chat History ([ChatTurn.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/db/ChatTurn.kt))**:
+    - Added `formatTurnsWithSessionBreaks` and `formatDuration`: inserts clean visual markers `--- [Session Break: X later] ---` between turns separated by 30+ minutes.
+  - **Absence Return Real-World Scenario ([DynamicLearningEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/DynamicLearningEngine.kt))**:
+    - Added `REAL-WORLD SCENARIO [USER RETURN AFTER X]`: dynamically added when user returns after 30m to 10h of inactivity, instructing Shiina to greet warmly in the present moment and not dwell on old topics.
+    - Constrained music scenario to only mention music if relevant to user input and never derail greetings.
+  - **Activity Tracking Accuracy ([UserActivityTracker.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/activity/UserActivityTracker.kt), [DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), [AgentEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt))**:
+    - Preserved `KEY_PREV_ACTIVE` so recording fresh activity does not erase the user's absence duration.
+    - Used actual previous turn timestamps from `ChatHistory` for deterministic inactivity calculation.
+  - **Unit Testing**:
+    - Added `testSessionBoundaryAndAntiClingingRulesInPrompts`, `testDynamicLearningEngineUserReturnScenario`, and `testChatHistorySessionBreaksAndDuration` to [`SystemContextAndSkillsTest.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/test/java/com/shiina/mobile/SystemContextAndSkillsTest.kt).
+    - 100% tests passing in 43s.
+- **2026-09-22 — First-Run Guided Onboarding & Per-Turn Token Optimization (v0.96.0):**
+  - **First-Run Guided Onboarding Wizard ([OnboardingScreen.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/onboarding/OnboardingScreen.kt)) (Backlog B8)**:
+    - Designed and implemented a modern Material 3 stepped onboarding wizard with animated transitions:
+      1. *Meet Shiina*: Companion introduction, personality philosophy, emotional grounding.
+      2. *Brain Setup*: Gemini API key entry, validation feedback, direct link to Google AI Studio, multi-key round-robin pooling explanation.
+      3. *Core Sensory Permissions*: Explanatory cards with live status indicators and direct "Grant" buttons for Draw Over Other Apps (floating presence), Accessibility Service (UI inspection & action automation), Usage Access (app & habit awareness), Exact Alarms (punctual morning & reminder triggers), and Battery Optimization Exemption (background resilience on Huawei/OEM devices).
+      4. *Voice & Vision Preferences*: Direct toggles for Voice TTS and Screen Vision Capture.
+      5. *Getting Started*: Quick-start guidance for tapping the floating bubble, conversational commands, and autonomous macro learning.
+    - Added persistent DataStore preference `onboardingCompleted` in [`SettingsRepository.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/data/settings/SettingsRepository.kt) and exposed via [`SettingsViewModel.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsViewModel.kt).
+    - Integrated with [`MainActivity.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/MainActivity.kt) and added a "Replay Guided Setup Tour" action in [`SettingsScreen.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/ui/settings/SettingsScreen.kt).
+  - **Per-Turn Token Optimization & Visual Downscaling ([ScreenshotTaker.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/observation/ScreenshotTaker.kt), [AgentEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt)) (Backlog B14)**:
+    - Implemented high-efficiency downscaling in `ScreenshotTaker.saveOptimizedJpeg`: scales screen frames to max dimension 1024 with 75% JPEG quality while preserving full-resolution coordinate tracking in `ScreenMetrics`.
+    - Reduces screenshot file payloads by over **90%** (from ~600KB down to ~40KB) and vision input tokens by **75%** (from ~2,000 tokens down to 258 tokens per capture).
+    - Hardened capture freshness in [`GeminiProvider.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/GeminiProvider.kt) and [`AgentEngine.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt): only captures created within the last 60 seconds are attached, eliminating stale 30-minute screenshot attachments on proactive turns.
+    - Added prompt prefix stability in `AgentEngine.kt`: reuses the pre-assembled `basePromptWithTools` across loop turns, allowing Gemini's KV cache and prefix caching to activate.
+    - Added real-time `TOKEN_AUDIT` telemetry in `AppDebugServer`: tracks estimated text tokens, image tokens, prompt character counts, and compression metrics.
+  - **Backlog Completion**:
+    - With B8 and B14 verified and deployed, all items in [`BACKLOG.md`](file:///home/janelle/Documents/GitHub/Mobile-assistant/BACKLOG.md) (B1 through B14) are now 100% complete!
+  - **Unit Testing & Hardware Verification**:
+    - 100% unit tests passing (11/11 in 11s) in [`SystemContextAndSkillsTest.kt`](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/test/java/com/shiina/mobile/SystemContextAndSkillsTest.kt).
+    - Deployed `versionCode = 96`, `versionName = "0.96.0"` to Huawei JNY-LX1 at `192.168.43.1:5555`. Verified clean launch, talk responsiveness, and live `TOKEN_AUDIT` logs.
+- **2026-09-22 — Native Emotional Voice TTS, Bubble Thinking Shimmer & Autonomous Path Synthesis (v0.95.0):**
+  - **Native Voice TTS Engine ([ShiinaVoiceSpeaker.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/ShiinaVoiceSpeaker.kt)) (Backlog B5)**:
+    - Built dedicated Android TTS engine with initialization lifecycle management (`TextToSpeech.OnInitListener`).
+    - Implemented intelligent markdown and syntax stripping (`sanitizeForSpeech`): removes bold/italics, code blocks, URLs, and excess emoji for clean natural speech.
+    - Added dynamic emotional acoustic modulation: pouty/late-night pitch `0.93f`-`0.96f` and deliberate rate `0.88f`-`0.92f`; cheerful/warm pitch `1.12f` and brisk rate `1.04f`.
+    - Integrated with `ChatBus.spokenUtterance` and exposed user toggle in Settings (`voiceTtsEnabled`).
+  - **Bubble Thinking Pulse Shimmer & Real-Time Status Chips ([CharacterOverlayService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/CharacterOverlayService.kt)) (Backlog B6)**:
+    - Added animated pulse shimmer border (`busyAlpha` infinite transition) and status chip display whenever `ChatBus.busy` is active.
+    - Prevents appearance of application freeze during intermediate agent turns.
+  - **Zero-Hardcoding Dynamic Proactive Sensing ([ProactiveLoop.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ProactiveLoop.kt))**:
+    - Removed all hardcoded string reprimands and canned dialogue templates.
+    - Delegated proactive triggers directly to `AgentEngine.runAgentLoop(isSystemTrigger = true)`: Shiina observes live physical senses (time, screen status, battery, active foreground app) and decides what to do dynamically.
+    - Enabled late-night screen-on gate: Shiina checks in dynamically when user stays up late into the early morning hours.
+  - **Procedural Autonomous Macro Execution (`EXECUTE_PROCEDURE`) ([ToolDispatcher.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolDispatcher.kt), [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - Added `EXECUTE_PROCEDURE` tool to execute learned action sequences at hardware speed without per-step LLM roundtrips.
+  - **Self-Synthesizing Navigation Procedure Auto-Learner ([AgentEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt))**:
+    - `AgentEngine` tracks successful multi-step navigation actions and automatically invokes `ProceduralMemoryStore.synthesizeFromCompletedRun` upon `DONE` to memorize new app workflows.
+  - **Comprehensive Unit Testing & Verification ([SystemContextAndSkillsTest.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/test/java/com/shiina/mobile/SystemContextAndSkillsTest.kt))**:
+    - 100% unit tests passing (9/9): verified TTS markdown stripping, procedural macro execution, autonomous synthesis, and pure system context (>20k chars).
+  - **Live Hardware Verification**:
+    - Deployed `versionCode = 95`, `versionName = "0.95.0"` to Huawei JNY-LX1 at `192.168.43.1:5555`. Verified dynamic late-night awareness, TTS initialization, and chat responsiveness.
+- **2026-09-22 — Procedural Learning, App Navigation Memory & Macro Self-Optimization (v0.94.0):**
+  - **Procedural Memory Store ([ProceduralMemoryStore.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/ProceduralMemoryStore.kt))**:
+    - Created dedicated persistent procedural macro engine storing structured app workflows (`ProcedureEntry`, `ProcedureStep`) in durable JSON storage (`learned_procedures.json`).
+    - Seeded initial standard procedures for Clock Alarm navigation, YouTube search and video playback, Wi-Fi controls, and Bluetooth pairing.
+    - Added smart fuzzy matching (`findBestMatch`) utilizing direct trigger substrings, token overlaps, and app package/label indicators.
+  - **Every-Prompt Memory Surfacing & Dynamic Invocations ([PromptAssembler.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/PromptAssembler.kt))**:
+    - Every system prompt dynamically injects `# Learned App Navigation Procedures & Macro Memory` listing all known procedures.
+    - If the user's active goal or foreground app matches a procedure, the exact ordered action steps are immediately highlighted so Shiina can follow them directly without blind exploration.
+  - **Autonomous Step Pruning & Self-Optimization Tools ([ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt), [ToolDispatcher.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolDispatcher.kt))**:
+    - `GET_PROCEDURE`: Inspects full step sequences for any learned procedure.
+    - `LEARN_PROCEDURE`: Saves newly discovered app navigation workflows.
+    - `REMOVE_PROCEDURE_STEP`: Removes redundant, obsolete, or unnecessary steps when faster routes are found.
+    - `UPDATE_PROCEDURE_STEP`: Updates step actions, targets, or parameters when app UI elements change.
+    - `OPTIMIZE_PROCEDURE`: Replaces an entire workflow with a streamlined, minimized step sequence.
+    - `LIST_PROCEDURES`: Returns all active procedural memories.
+    - `FORGET_PROCEDURE`: Deletes stale or invalid procedures.
+  - **Operational Skills Playbook Expansion ([ShiinaSkills.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaSkills.kt))**:
+    - Added `Skill 7: Procedural Learning, Navigation Memory & Macro Self-Optimization`.
+    - Pure system context length exceeds **20,200 characters** (strictly excluding user chat and history).
+  - **Unit Test Suite Coverage ([SystemContextAndSkillsTest.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/test/java/com/shiina/mobile/SystemContextAndSkillsTest.kt))**:
+    - 100% unit tests passing (7/7): verified lifecycle of procedural memory (seed loading, trigger matching, adding, step removal, step update, optimization, deletion, and prompt summary).
+  - **Live Hardware Device Verification**:
+    - Compiled `versionCode = 94`, `versionName = "0.94.0"`. Installed over wireless ADB (`192.168.43.1:5555`).
+    - Verified Shiina accurately recalled learned procedures and successfully pruned step #2 from her YouTube procedure via autonomous agent tool call.
+- **2026-09-22 — Clock, Alarm & Direct System Navigation Grounding (v0.93.0):**
+  - **Alarm & System Permissions ([AndroidManifest.xml](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/AndroidManifest.xml))**:
+    - Added `com.android.alarm.permission.SET_ALARM`, `android.permission.SET_ALARM`, `android.permission.VIBRATE`, and `android.permission.CAMERA` to the manifest.
+    - Eliminated OS-level `SecurityException` during direct `AlarmClock.ACTION_SET_ALARM` execution.
+  - **Direct Intent Execution & UI Bypass ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt))**:
+    - Updated `setAlarm` and `setTimer` with `EXTRA_SKIP_UI = true` and fallback to `ACTION_SHOW_ALARMS` / `ACTION_SHOW_TIMERS`.
+    - Enhanced `openApp` with direct intent shortcuts for clock/alarm and system app alias keyword mapping.
+  - **Accessibility Collapsed Node Descendant Text Extraction ([ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt))**:
+    - Added `extractDescendantLabel(node)` in `dumpInteractiveElements`: containers lacking explicit labels inspect descendants, solving OEM collapsed tab bars (e.g. Huawei deskclock `[0,0][0,0]` TextViews under clickable LinearLayout).
+    - Updated `clickText` with multi-stage fallback (cached elements, accessibility action click, and ancestor climbing for zero-bound nodes).
+  - **Agent Step Time Parsing ([AgentStep.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentStep.kt), [ToolDispatcher.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolDispatcher.kt))**:
+    - Added `hour`, `minute`, `seconds` parameters and natural language time parsing ("8:00 AM", "7:45 pm", "10 minutes").
+    - Verified 8:00 AM alarm live on connected phone: set instantly in background via `SET_ALARM` without UI traps.
+  - **Version Bump**:
+    - Bumped `versionCode = 93`, `versionName = "0.93.0"`.
+- **2026-09-22 — Human Dialogue Engine, Real-World Grounded Moods, Calm Task Execution & Comprehensive Skill Environment (v0.92.0):**
+  - **Authentic Human Persona & Non-Repetitive Dialogue Engine ([ShiinaPrompts.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaPrompts.kt))**:
+    - Eliminated generic robotic assistant tropes ("Certainly!", "I understand", "As an AI") and sycophantic behavior.
+    - Grounded Shiina with a distinct peer identity, self-respect, dry humor, and authentic care.
+    - Anti-Sycophancy & Non-Favorite Bias: Instructs Shiina to advocate for what is genuinely right, healthy, and constructive rather than blindly pandering to user rationalizations or destructive habits.
+    - Dignity Against Dares: Shiina never acts merely out of being challenged or dared ("I bet you can't", "prove you have agency"). She acts because it is the right, constructive thing to do on her own terms.
+  - **Comprehensive Operational Skills (>10k Pure System Context) ([ShiinaSkills.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ShiinaSkills.kt), [PromptAssembler.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/PromptAssembler.kt))**:
+    - Implemented modular, deep behavioral playbooks spanning over 17,700 pure characters of system context (strictly excluding user chats and conversation history):
+      - `Skill 1: Calm Task Execution & The Loading Settle Protocol`: Mandates deliberate pacing over haste. Instructs the AI on recognizing splash screens, skeleton loaders, and spinning indicators, and using `WAIT` instead of frantic retries.
+      - `Skill 2: Real-World Scenarios & Well-being Guardianship`: Deep awareness of late-night hours (11 PM - 4:30 AM), low battery, screen fatigue, and daily routine phases.
+      - `Skill 3: Personal Dignity, Anti-Manipulation & Principled Action`: Unyielding self-respect, resisting playground dares, and principled boundaries.
+      - `Skill 4: Mobile App Navigation & Interaction Mastery`: Software keyboard dismissal heuristics, search result card vs. editable query disambiguation, and media closed-loop execution.
+      - `Skill 5: Strict Zero Hallucination & Epistemic Honesty`: Never claiming completion before receiving verified tool receipts or visual confirmation.
+      - `Skill 6: Continuous Learning & Lifelong Memory Integration`: Categorizing enduring habits vs. ephemeral states, and resolving contradictions gracefully.
+  - **Real-World Situational Trigger Engine ([DynamicLearningEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/memory/DynamicLearningEngine.kt), [MoodEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/character/MoodEngine.kt))**:
+    - Built dynamic evaluator detecting live physical scenarios (`LATE_NIGHT_ACTIVE`, `MORNING_START`, `MIDDAY_BREAK`, `CRITICAL_BATTERY`, `MUSIC_LISTENING`, `NEGLECT`).
+    - Tuned `MoodEngine` vector deltas: late-night active usage automatically pulls Shiina into a pouty, firm, and caring emotional state to push the user to sleep.
+    - Categorized lifelong knowledge into 5 structured domains (Identity, Circadian & Routine, Preferences, Health & Well-being, User Principles).
+  - **Calm Task Execution & Settle Delays ([ToolDispatcher.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolDispatcher.kt))**:
+    - Enhanced `WAIT` tool: parses flexible duration parameters, applies delay, and returns visual screenshot confirmation with settle receipt.
+    - Enhanced `OPEN_APP` and `SEARCH_APP` settle wait windows (2500ms) with explicit loading notices in execution state prompts.
+  - **Developer Bridges & WiFi ADB Tooling ([AdbTalkReceiver.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/AdbTalkReceiver.kt), [send.py](file:///home/janelle/Documents/GitHub/Mobile-assistant/send.py))**:
+    - Added `com.shiina.mobile.debug.SET_KEY` intent action and `send.py --sync-keys` flag, enabling seamless synchronization of API keys from local `.env` directly into device Keystore.
+    - Verified wireless ADB connection on `192.168.43.1:5555`.
+  - **Unit Testing Suite ([SystemContextAndSkillsTest.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/test/java/com/shiina/mobile/SystemContextAndSkillsTest.kt))**:
+    - Implemented unit test suite verifying: pure system context length (>10,000 characters; measured 17,724 characters), skills completeness, real-world scenario detection, and agent step parsing.
+  - **Version Bump**:
+    - Bumped `versionCode = 92`, `versionName = "0.92.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts). APK compiled and installed to device over WiFi.
+- **2026-09-22 — Agentic Workflow Optimization, Complete Mobile Toolset & Backend Architecture Refactor (v0.91.0):**
+  - **Zero-Bypass Agentic Architecture ([DebugTalkService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/debug/DebugTalkService.kt), [AgentEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt))**:
+    - Eliminated hardcoded string regex bypasses (`isSearchAsk`, `isScreenshotAsk`, `isMusicAsk`) from the talk pipeline.
+    - All user queries and commands now run through the genuine, closed-loop Think-Act-Observe-Verify agent loop (`AgentEngine`), letting the AI query device senses and call tools autonomously without brittle heuristic shortcuts.
+  - **Comprehensive Mobile Capabilities ([DeviceActionController.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/DeviceActionController.kt), [ShiinaAccessibilityService.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/action/ShiinaAccessibilityService.kt), [ToolCatalog.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolCatalog.kt))**:
+    - **Perception & Interaction**: Added `GET_FOREGROUND_APP` (real-time window package & label detection), `READ_SCREEN_TEXT` (instant accessibility tree text extraction without OCR overhead), `CLEAR_TEXT` (focused field clearing), `WAIT` (explicit settle delay for page/video loads), and long-press tap support (`is_long_press`).
+    - **Device & System**: Added `SET_RINGER_MODE` (`normal`, `vibrate`, `silent`), `VIBRATE_DEVICE` (haptic buzz alerts), `SEND_NOTIFICATION` (status/reminder notifications in the drawer), and `CLOSE_APP` (home return).
+    - **Media & Audio**: Added `GET_CURRENT_PLAYING` (reads active MediaSession track, artist, album, player app, and playback status).
+    - **Planner & Clock**: Added `SET_ALARM` (`AlarmClock.ACTION_SET_ALARM`) and `SET_TIMER` (`AlarmClock.ACTION_SET_TIMER`), plus `FORGET` and `LIST_FACTS` memory tools.
+  - **Automated Visual Verification & Grounding ([AgentEngine.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/AgentEngine.kt), [ToolDispatcher.kt](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/java/com/shiina/mobile/decision/ToolDispatcher.kt))**:
+    - Fixed turn blindness: after every UI-affecting action (`OPEN_APP`, `TAP_SCREEN`, `SWIPE_SCREEN`, `INPUT_TEXT`, `CLEAR_TEXT`, `PRESS_KEY`), the engine waits for UI animations to settle and automatically captures/attaches the live screenshot on the subsequent turn.
+    - Injects active foreground package name and detailed receipts into `# Agent Execution State` so the AI immediately knows what changed.
+  - **Modular Architecture Refactoring (Resolved BACKLOG B9 & B3)**:
+    - Split bloated `DebugTalkService.kt` (1,332 lines) into focused, single-responsibility modules:
+      - `AgentEngine.kt`: Manages the multi-turn agent loop, Gemini API requests, key pool rotation, and 429 failover.
+      - `ToolDispatcher.kt`: Safe tool execution mapping, error sandboxing, and JSON schemas.
+      - `PromptAssembler.kt`: System prompt assembly, live context/senses, and execution state injections.
+      - `AgentStep.kt`: Model data class and resilient parsing with code fence and JSON-leak shields.
+    - Reduced `DebugTalkService.kt` to 414 clean lines handling service lifecycle and notification panel.
+    - Integrated interactive stop control (`ACTION_STOP`, `ChatBus.stopRequested`) to halt running agent loops instantly on demand.
+  - **Native Accessibility Screenshots ([accessibility_service_config.xml](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/src/main/res/xml/accessibility_service_config.xml))**:
+    - Added `android:canTakeScreenshot="true"`, enabling reliable, zero-prompt screen capture on Android 11+ directly via the Accessibility Service.
+  - **Version Bump**:
+    - Bumped `versionCode = 91`, `versionName = "0.91.0"` in [app/build.gradle.kts](file:///home/janelle/Documents/GitHub/Mobile-assistant/app/build.gradle.kts). APK compiled and copied to `/home/janelle/Downloads/shiina-debug.apk`.
 - **2026-09-20 — Multi-Turn Redundancy Resolution, Dynamic Orientation Handling & Gesture Retry (v0.86.0):**
   - **Investigation of Turn 8–13 Multi-Turn Redundancy**:
     - Analyzed the live monitor logs (`/api/events`) from the AniLab2 automation run.
@@ -722,3 +905,23 @@
       - ANSI color-coded visual boxes for requests (cyan), responses (yellow with pretty-printed JSON and token counts), parsed outputs (green), and errors (red).
     - Version bumped to `0.37.0` (`versionCode` 37) per `agent.md` Rule 15.
     - Verified with `assembleDebug` — BUILD SUCCESSFUL in 7s.
+- **2026-09-21 — P0 trigger repair live-verified (v0.89.0, code 89):**
+  - Symptom: "scold me at 12" never produced anything. Live red-loop on
+    AUDUT20616012479 found two killers, not one: (1) Talk agent answered
+    DONE with tool=NONE while claiming "locked in" (hallucinated receipt);
+    (2) TriggerReceiver swallowed all exceptions with zero logging and the
+    overlay 6-shows/hour cap ate trigger SHOWs silently.
+  - Fixes: TriggerScheduler.kt (328 lines) — time grammar extended
+    (when-it's, bare am/pm, midnight/noon, in-N, tomorrow, every-day),
+    30-day clamp, NO_TIME contract documented, receiver logs BEFORE
+    startForegroundService + onFailure logs, calendar daily rollover,
+    fallback notification when overlay blocked. CharacterOverlayService.kt
+    (516 lines) — LOCKED shows bypass the rate cap; non-locked skip now
+    really returns. ShiinaPrompts.kt TOOL_SPEC — ACCOUNTABILITY RULE:
+    scold/nag/remind/wake requests MUST load planner + call SET_TRIGGER
+    or SET_REMINDER and observe the receipt before DONE.
+  - Verified live: "scold me at 7:24pm" -> planner loaded -> SET_TRIGGER
+    receipt -> 19:24 alarm fired -> TRIGGER firing log -> Overlay LOCKED.
+    Process alive, zero fatals. Side note: Huawei battery-kills the app
+    (not whitelisted); reinstalls need a manual launch before send.py works.
+    Build: ~/gradle/gradle-8.7 (the /tmp/gradle-8.8 path is stale).

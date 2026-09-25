@@ -128,6 +128,18 @@ fun PermissionSection(
             granted = hasAccessibilityAccess(context),
             onOpen = { openAccessibilitySettings(context) },
         )
+
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            thickness = 1.dp,
+        )
+
+        PermissionItemRow(
+            title = "Unrestricted battery",
+            description = "Stops the OS from killing Shiina in the background (triggers, greeting, overlay)",
+            granted = isIgnoringBatteryOptimizations(context),
+            onOpen = { openBatterySettings(context) },
+        )
     }
 }
 

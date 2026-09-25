@@ -14,10 +14,17 @@
     <!-- Sleep read via Health Connect. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
 
-    <!-- Alarms + foreground observation. -->
+    <!-- Alarms + foreground observation + timers. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -29,6 +36,7 @@
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
+            android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -87,6 +95,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.shiina.mobile.debug.SEND_MESSAGE" />
+                <action android:name="com.shiina.mobile.debug.SET_KEY" />
             </intent-filter>
         </receiver>
         <receiver
@@ -94,6 +103,21 @@
             android:exported="false">
             <intent-filter>
                 <action android:name="com.shiina.mobile.ACTION_REMINDER" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".action.TriggerReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.shiina.mobile.ACTION_TRIGGER" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name=".action.ProactiveLoop"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.shiina.mobile.action.PROACTIVE_TICK" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
     </application>
