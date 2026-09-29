@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Launcher mark: the mood orb from ui/components/ShiinaVisuals.kt, reduced to its
+  essentials — indigo sphere, two eyes, and a perfectly flat mouth. Deadpan, per persona.
+  108x108 viewport with all content inside the 72dp adaptive-icon safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Sphere -->
+    <path
+        android:fillColor="#FF6366F1"
+        android:pathData="M54,24a30,30 0 1,0 0,60a30,30 0 1,0 0,-60z" />
+
+    <!-- Upper-left specular lift, echoing the orb highlight -->
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M54,24a30,30 0 0,1 30,30a30,30 0 0,1 -12,24a26,26 0 0,0 6,-18a30,30 0 0,0 -30,-30a26,26 0 0,0 -10,2a30,30 0 0,1 16,-8z" />
+
+    <!-- Eyes -->
+    <path
+        android:fillColor="#FF0B1220"
+        android:pathData="M44,47.4a3.6,3.6 0 1,0 0,7.2a3.6,3.6 0 1,0 0,-7.2z" />
+    <path
+        android:fillColor="#FF0B1220"
+        android:pathData="M64,47.4a3.6,3.6 0 1,0 0,7.2a3.6,3.6 0 1,0 0,-7.2z" />
+
+    <!-- Flat mouth -->
+    <path
+        android:pathData="M43,67 L65,67"
+        android:strokeColor="#FF0B1220"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round" />
+</vector>

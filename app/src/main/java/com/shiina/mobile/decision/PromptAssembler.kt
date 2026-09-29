@@ -88,7 +88,7 @@ object PromptAssembler {
             val lastTimeStr = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(prevInteraction))
             if (diffMinutes >= 30) {
                 val gapStr = if (diffMinutes < 60) "${diffMinutes} minutes" else if (diffMinutes < 90) "about an hour" else "${"%.1f".format(diffMinutes / 60.0)} hours"
-                appendLine("- Conversational Recency: [NEW SESSION — User returned after $gapStr, last active at $lastTimeStr]. The previous interaction has concluded. Do not obsess over or drag up concluded topics from earlier hours. Respond to their immediate message and greeting in the present moment.")
+                appendLine("- Conversational Recency: [Pause of $gapStr — last active at $lastTimeStr]. They stepped away and came back. Greet them in the present moment, then pick the thread back up: what you were discussing is still yours to continue, and it is natural to reference it if it is relevant to what they just said.")
             } else if (diffMinutes >= 5) {
                 appendLine("- Conversational Recency: [Recent pause — $diffMinutes minutes since last message at $lastTimeStr].")
             } else {
@@ -208,6 +208,6 @@ object PromptAssembler {
             appendLine("- Steps taken: ${stepsTaken.joinToString("; ")}")
             appendLine()
         }
-        appendLine("The task is completed. Speak as Shiina, plain conversational text ONLY (no JSON, no meta talk). Short default (1-2 sentences); if the user asked for a list, give the full list from the steps above.")
+        appendLine("The task is completed. Speak as Shiina in plain conversational text ONLY (no JSON, no meta talk). Deadpan and human: one or two short plain sentences, the way you'd say it out loud. Only expand if the user asked for a list or detail — then give the full list from the steps above, not a truncated summary.")
     }
 }

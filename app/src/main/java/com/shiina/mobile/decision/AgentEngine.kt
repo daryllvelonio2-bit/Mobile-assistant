@@ -33,6 +33,12 @@ class AgentEngine(
 data class AgentRunResult(
     val message: String,
     val nextCheckInMinutes: Int,
+    /**
+     * The mood the engine actually resolved for this turn (mood engine + whatever the model
+     * expressed). Callers must use this instead of their own stale copy, otherwise the overlay
+     * avatar colour, TTS pitch and notification label all report the pre-turn mood.
+     */
+    val tone: String = "calm",
 )
 
     /**
@@ -46,8 +52,22 @@ data class AgentRunResult(
         hoursInactive: Double = 0.0,
         onProgress: (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
-        val result = runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress)
-        result.message
+        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress).message
+    }
+
+    /**
+     * Same loop, but returns the full result so callers can read the mood the engine actually
+     * resolved instead of guessing from their own pre-turn state.
+     */
+    suspend fun runAgentLoopResult(
+        userText: String,
+        initialTone: String,
+        initialMode: String,
+        isSystemTrigger: Boolean = false,
+        hoursInactive: Double = 0.0,
+        onProgress: (String) -> Unit = {},
+    ): AgentRunResult = withContext(Dispatchers.IO) {
+        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress)
     }
 
     suspend fun rawQuery(prompt: String, tone: String = "calm", attachShot: Boolean = false): String {
@@ -106,7 +126,7 @@ data class AgentRunResult(
                 // Check if user requested to stop execution
                 if (ChatBus.stopRequested) {
                     AppDebugServer.log("AGENT_LOOP", "Agent loop halted: stop requested by user.")
-                    return@withContext AgentRunResult("Action stopped.", -1)
+                    return@withContext AgentRunResult("Action stopped.", -1, currentTone)
                 }
 
                 val raw = postText(currentPrompt, attachShot = shouldAttachShot, structuredSchema = true)
@@ -125,13 +145,13 @@ data class AgentRunResult(
                     }
                     AppDebugServer.log(
                         "GEMINI_TALK_PARSED",
-                        "Agent step #${calls + 1}: mood=${step.mood}, status=${step.status}, tool=${step.tool}, nextCheckIn=${step.nextCheckInMinutes}, thought=\"${step.thought.take(80)}\", message=\"${step.message.take(80)}\"",
+                        "Agent step #${calls + 1}: mood=${step.mood}, status=${step.status}, tool=${step.tool}, nextCheckIn=${step.nextCheckInMinutes}, thought=\"${step.thought.take(120)}\", message=\"${step.message.take(400)}\"",
                     )
                 }
 
                 if (step == null) {
                     // Plaintext response fallback
-                    answer = raw.trim().take(512)
+                    answer = raw.trim().take(2000)
                     break
                 }
 
@@ -160,7 +180,7 @@ data class AgentRunResult(
                             finalMsg = postText(finalPrompt, attachShot = false).trim()
                         }
                     }
-                    answer = finalMsg.trim().take(512)
+                    answer = finalMsg.trim().take(2000)
                     AppDebugServer.log("TALK_AGENT", "Agent invoked completion (DONE) at step #${calls + 1}")
                     break
                 }
@@ -294,8 +314,9 @@ data class AgentRunResult(
             }
 
             AgentRunResult(
-                message = answer.trim().take(512).ifEmpty { "(empty reply)" },
+                message = answer.trim().take(2000).ifEmpty { "(empty reply)" },
                 nextCheckInMinutes = chosenNextInterval,
+                tone = currentTone,
             )
         } finally {
             ChatBus.endRun()
@@ -308,7 +329,8 @@ data class AgentRunResult(
     private suspend fun postText(prompt: String, attachShot: Boolean, structuredSchema: Boolean = false): String {
         val keyPool = container.geminiKeyPool
         val totalKeys = container.keyStore.getKeys("gemini").size.coerceAtLeast(1)
-        val maxAttempts = (totalKeys * 2).coerceAtMost(4)
+        // Mobile data drops are common; give a single key at least 3 tries before giving up.
+        val maxAttempts = (totalKeys * 2).coerceIn(3, 6)
 
         val parts = JSONArray().put(
             JSONObject().put("text", prompt),
@@ -364,22 +386,35 @@ data class AgentRunResult(
         var currentModel = configuredModel
         var fallbackTriggered = false
 
+        var lastFailure = "no attempt made"
         for (attempt in 1..maxAttempts) {
-            val key = keyPool.next()
-                ?: container.keyStore.getKeys("gemini").firstOrNull()
-                ?: throw IllegalStateException("no gemini keys configured")
+            val poolKey = keyPool.next()
+            val storedKeys = runCatching { container.keyStore.getKeys("gemini") }.getOrDefault(emptyList())
+            val key = poolKey ?: storedKeys.firstOrNull()
+            if (key == null) {
+                lastFailure = "no gemini keys configured (pool=${if (poolKey == null) "empty" else "n/a"}, keystore=${storedKeys.size})"
+                AppDebugServer.log("GEMINI_FAIL", lastFailure)
+                break
+            }
 
-            val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/$currentModel:generateContent?key=$key")
-                .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
-                .build()
+            val request = try {
+                Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/$currentModel:generateContent?key=$key")
+                    .post(requestBody.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+            } catch (e: Exception) {
+                lastFailure = "malformed request for model '$currentModel': ${e::class.simpleName}: ${e.message}"
+                AppDebugServer.log("GEMINI_ERROR", "$lastFailure")
+                break
+            }
 
-            val raw = runCatching {
+            val raw = try {
                 http.newCall(request).execute().use { response ->
                     val code = response.code
                     val respBody = response.body?.string().orEmpty()
                     AppDebugServer.log("GEMINI_NET", "API response code=$code bodyLen=${respBody.length}: ${respBody.take(400)}")
                     if (!response.isSuccessful) {
+                        lastFailure = "HTTP $code from $currentModel: ${respBody.take(300)}"
                         if (code == 429) {
                             keyPool.reportFailure(key, 60_000L)
                             AppDebugServer.log("WARN", "Gemini key ...${key.takeLast(4)} hit 429 rate limit on $currentModel, rotating key in pool")
@@ -389,11 +424,21 @@ data class AgentRunResult(
                                 AppDebugServer.log("WARN", "Failing over to alternate model: $currentModel (separate quota pool)")
                             }
                         }
-                        throw IllegalStateException("gemini $code")
+                        ""
+                    } else {
+                        respBody
                     }
-                    respBody
                 }
-            }.getOrDefault("")
+            } catch (e: Exception) {
+                // Previously this exception was swallowed silently — the app degraded
+                // to the canned "lost my train of thought" reply with no trace of why.
+                lastFailure = "network error on $currentModel: ${e::class.simpleName}: ${e.message}"
+                AppDebugServer.log(
+                    "GEMINI_ERROR",
+                    "Attempt $attempt/$maxAttempts $lastFailure\n${e.stackTraceToString().take(1200)}",
+                )
+                ""
+            }
 
             if (raw.isNotBlank()) {
                 AppDebugServer.log("GEMINI_RAW", "Raw API response length=${raw.length}: ${raw}")
@@ -407,13 +452,22 @@ data class AgentRunResult(
                     ?.trim()
 
                 if (!text.isNullOrBlank()) {
-                    return text.take(1024)
+                    // Generous cap: the old 1024-char limit truncated her mid-sentence.
+                    return text.take(4096)
                 }
                 AppDebugServer.log("WARN", "Gemini returned empty text or finishReason=$finishReason on attempt $attempt ($currentModel)")
             }
             if (attempt < maxAttempts) delay(300L)
         }
 
-        return "{\"thought\": \"Response generation failed\", \"status\": \"DONE\", \"tool\": \"NONE\", \"message\": \"Hmm, I lost my train of thought for a second. What's on your mind?\"}"
+        AppDebugServer.log(
+            "GEMINI_FAIL",
+            "All $maxAttempts attempt(s) failed (model=$currentModel, keys=${container.keyStore.getKeys("gemini").size}). Last failure: $lastFailure",
+        )
+        // All attempts exhausted: say what actually happened instead of a vague canned line,
+        // so a dead turn is diagnosable from the conversation itself.
+        return "{\"thought\": \"Response generation failed\", \"status\": \"DONE\", \"tool\": \"NONE\", " +
+            "\"message\": \"I'm not dodging you — I genuinely can't reach my models right now. " +
+            "The connection dropped out. Give it a moment and say that again.\"}"
     }
 }

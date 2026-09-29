@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark counterpart of values/colors.xml — matches BackgroundDark (0xFF030712). -->
+    <color name="shiina_window_background">#FF030712</color>
+</resources>

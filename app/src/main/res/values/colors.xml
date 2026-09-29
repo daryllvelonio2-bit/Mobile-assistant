@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand palette mirrored from theme/Color.kt so the window theme and the
+         Compose theme can never drift apart (no white flash on launch). -->
+    <color name="shiina_brand">#FF6366F1</color>
+    <color name="shiina_window_background">#FFFAFAFA</color>
+    <color name="ic_launcher_background">#FF0B1220</color>
+</resources>

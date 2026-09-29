@@ -237,9 +237,13 @@ class DebugTalkService : Service() {
                 dbg("User was inactive for ${"%.1f".format(hoursInactive)}h — mood now $lastTone")
             }
 
-            // Zero-bypass: execute directly through the AgentEngine
-            val reply = runCatching {
-                agentEngine.runAgentLoop(
+            // Zero-bypass: execute directly through the AgentEngine.
+            // Use the result-returning entry point so lastTone becomes the mood the engine
+            // actually resolved — otherwise the overlay colour, TTS pitch and notification
+            // label all report the stale pre-turn mood.
+            var reply = ""
+            runCatching {
+                agentEngine.runAgentLoopResult(
                     userText = text,
                     initialTone = lastTone,
                     initialMode = lastMode,
@@ -249,9 +253,12 @@ class DebugTalkService : Service() {
                         pushTextToOverlay(progress)
                     },
                 )
-            }.getOrElse { e ->
+            }.onSuccess { result ->
+                reply = result.message
+                lastTone = result.tone
+            }.onFailure { e ->
                 AppDebugServer.log("ERROR", "DebugTalk chat failed: ${e.message}")
-                "Gemini unreachable (${e.message ?: "error"}). Check API keys in Settings."
+                reply = "Gemini unreachable (${e.message ?: "error"}). Check API keys in Settings."
             }
 
             lastReply = reply
@@ -320,7 +327,11 @@ class DebugTalkService : Service() {
         val builder = NotificationCompat.Builder(this, CHANNEL)
             .setContentTitle(if (isBusy) "Shiina is working... · tone=$lastTone" else "Shiina debug · tone=$lastTone · logs=${if (logsEnabled) "ON" else "OFF"}")
             .setContentText(if (isBusy && progressText.isNotBlank()) progressText else headsUp ?: "Her words float above the bubble — tap Talk to chat.")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(com.shiina.mobile.R.drawable.ic_stat_shiina)
+            .setColor(0xFF6366F1.toInt())
+            .setCategory(android.app.Notification.CATEGORY_SERVICE)
+            .setShowWhen(false)
+            .setSilent(true)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setStyle(NotificationCompat.BigTextStyle().bigText("Tone: $lastTone · Mode: $lastMode\nLatest: $lastReply"))
@@ -363,15 +374,19 @@ class DebugTalkService : Service() {
                 dbg("Triggering boot greeting with mood: $lastTone (inactive: ${"%.1f".format(hoursInactive)}h)")
                 val bootPrompt = ShiinaPrompts.bootGreetingPrompt(lastTone, hoursInactive)
 
-                val reply = runCatching {
-                    agentEngine.runAgentLoop(
+                var reply = ""
+                runCatching {
+                    agentEngine.runAgentLoopResult(
                         userText = bootPrompt,
                         initialTone = lastTone,
                         initialMode = lastMode,
                         isSystemTrigger = true,
                         hoursInactive = hoursInactive,
                     )
-                }.getOrElse { "" }
+                }.onSuccess { result ->
+                    reply = result.message
+                    lastTone = result.tone
+                }
 
                 if (reply.isNotBlank() && !reply.startsWith("Gemini unreachable") && !reply.startsWith("Action stopped")) {
                     lastGreetingTimestamp = System.currentTimeMillis()

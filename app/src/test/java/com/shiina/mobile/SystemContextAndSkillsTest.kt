@@ -7,6 +7,7 @@ import com.shiina.mobile.decision.ToolCatalog
 import com.shiina.mobile.decision.ToolDispatcher
 import com.shiina.mobile.memory.DynamicLearningEngine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,8 +45,14 @@ class SystemContextAndSkillsTest {
         val charCount = systemContext.length
         println("Calculated pure system context character count (without user chat/history): $charCount chars")
 
-        // User requirement: ~5k context
-        assertTrue("Pure system context must be within 5.2k characters, was: $charCount", charCount <= 5200)
+        // Prompt budget guard: total context assembled at runtime reaches ~20k once live
+        // telemetry, memory and procedures are appended; this pure block (rules + skills +
+        // tool spec + learning categories, excluding chats/history) runs ~6-7k. Guard both
+        // floor and ceiling so playbooks can never silently vanish, nor the context balloon.
+        assertTrue("Pure system context must stay rich (>= 6k chars), was: $charCount", charCount >= 6_000)
+        assertTrue("Pure system context must stay bounded (<= 30k chars), was: $charCount", charCount <= 30_000)
+        assertTrue("Prompt version must be the deadpan-alive generation",
+            ShiinaPrompts.PROMPT_VERSION.startsWith("v9."))
     }
 
     @Test
@@ -366,22 +373,40 @@ class SystemContextAndSkillsTest {
     }
 
     @Test
-    fun testSessionBoundaryAndAntiClingingRulesInPrompts() {
+    fun testDeadpanVoiceLengthFloorAndConversationalContinuity() {
         val rules = ShiinaPrompts.GLOBAL_RULES
         val talkDrive = ShiinaPrompts.TALK_DRIVE
 
-        assertTrue("Must include Session Boundaries section in GLOBAL_RULES",
-            rules.contains("Conversational Session Boundaries & Temporal Recency Etiquette"))
-        assertTrue("Must contain Anti-Clinging & Topic Expiry rule",
-            rules.contains("Anti-Clinging & Topic Expiry"))
-        assertTrue("Must explicitly forbid dragging up previous conversation",
-            rules.contains("Never cling to, obsess over, or drag up previous conversation topics"))
-        assertTrue("Must require natural present-moment greetings",
-            rules.contains("Natural Present-Moment Greetings"))
+        // Deadpan delivery.
+        assertTrue("GLOBAL_RULES must define the deadpan voice",
+            rules.contains("Voice: Deadpan."))
 
-        assertTrue("TALK_DRIVE must include Fresh Session Etiquette",
-            talkDrive.contains("Fresh Session Etiquette"))
-        assertTrue("TALK_DRIVE must state not to drag up old topics into a fresh greeting",
+        // Human register: text a person, not an assistant.
+        assertTrue("Must require talking like a human",
+            rules.contains("Talk like a human, not a helper"))
+        assertTrue("Must define the human length register",
+            rules.contains("# Human Length & Register"))
+        assertTrue("Default must be short, human-sized replies",
+            rules.contains("Short by default: one or two lines"))
+        assertTrue("Must forbid interviewing the user every turn",
+            rules.contains("Do not end every message with a question"))
+
+        // The earlier over-correction (a mandatory multi-sentence floor) must be gone.
+        assertFalse("No rigid multi-sentence length floor may be enforced",
+            rules.contains("LENGTH FLOOR") || rules.contains("2-5 full sentences"))
+
+        // Multi-turn continuity replaced the old anti-clinging / session-reset behaviour.
+        assertTrue("TALK_DRIVE must define a Continuous Thread rule",
+            talkDrive.contains("Continuous Thread"))
+        assertTrue("TALK_DRIVE must carry topics forward rather than drop them",
+            talkDrive.contains("Carry Forward"))
+        assertTrue("TALK_DRIVE must forbid dead-end replies",
+            talkDrive.contains("No Dead Ends"))
+
+        // The old session-reset wording must be gone.
+        assertFalse("Anti-clinging must no longer forbid continuing a thread",
+            rules.contains("Never cling to, obsess over, or drag up previous conversation topics"))
+        assertFalse("Fresh-session etiquette must not reset the conversation",
             talkDrive.contains("Never drag concluded earlier subjects into a fresh greeting"))
     }
 

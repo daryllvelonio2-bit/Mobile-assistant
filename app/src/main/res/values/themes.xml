@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light window theme. windowBackground matches BackgroundLight (0xFFFAFAFA)
+         in theme/Color.kt, so the pre-Compose frame is indistinguishable from the
+         first Compose frame instead of flashing white-on-white or dark-on-light. -->
+    <style name="Theme.Shiina" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/shiina_window_background</item>
+        <item name="android:colorAccent">@color/shiina_brand</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

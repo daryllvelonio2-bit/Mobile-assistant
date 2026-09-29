@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Shiina</string>
+    <string name="accessibility_service_label">Shiina Mobile Accessibility</string>
+    <string name="music_listener_label">Shiina Music Listener</string>
+</resources>

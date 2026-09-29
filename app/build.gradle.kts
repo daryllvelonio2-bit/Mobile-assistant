@@ -13,8 +13,8 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 102
-        versionName = "0.102.0"
+        versionCode = 107
+        versionName = "0.103.4"
         ndk {
             // sherpa-onnx ships arm64 + arm32; arm64-only keeps the APK lean (JNY-LX1 is arm64).
             abiFilters += listOf("arm64-v8a")
@@ -76,6 +76,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation("androidx.compose.material:material-icons-extended")
 
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)

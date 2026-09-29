@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Status-bar small icon. Android tints notification small icons to a flat silhouette, so this
+  is drawn as a single even-odd path: the orb body is filled and the eyes + flat mouth are
+  punched through as real holes, which survives tinting instead of turning into a solid blob.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,3a9,9 0 1,0 0,18a9,9 0 1,0 0,-18z M9.4,10.3a1.25,1.25 0 1,0 0,2.5a1.25,1.25 0 1,0 0,-2.5z M14.6,10.3a1.25,1.25 0 1,0 0,2.5a1.25,1.25 0 1,0 0,-2.5z M9.3,15.3h5.4v1.6h-5.4z" />
+</vector>

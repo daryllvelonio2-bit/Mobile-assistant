@@ -29,9 +29,13 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -220,7 +224,12 @@ class CharacterOverlayService : Service() {
     private fun notification(): Notification = Notification.Builder(this, CHANNEL)
         .setContentTitle("Shiina character")
         .setContentText("Overlay active")
-        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setSmallIcon(com.shiina.mobile.R.drawable.ic_stat_shiina)
+        .setColor(0xFF6366F1.toInt())
+        .setCategory(Notification.CATEGORY_SERVICE)
+        .setShowWhen(false)
+        .setOnlyAlertOnce(true)
+        .setSound(null)
         .build()
 
     @SuppressLint("ClickableViewAccessibility")
@@ -278,32 +287,42 @@ class CharacterOverlayService : Service() {
                     )
 
                     if (message.isNotEmpty()) {
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                shadow = Shadow(
-                                    color = Color.Black.copy(alpha = 0.8f),
-                                    offset = Offset(1f, 1f),
-                                    blurRadius = 4f,
-                                ),
-                            ),
-                            color = toneColor(tone),
-                            modifier = Modifier.widthIn(max = 240.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 248.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(Color(0xE60B1220))
+                                .border(1.5.dp, toneColor(tone).copy(alpha = 0.7f), RoundedCornerShape(18.dp))
+                                .padding(horizontal = 13.dp, vertical = 9.dp),
+                        ) {
+                            Text(
+                                text = message,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color(0xFFF1F5F9),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                     } else if (isBusy) {
                         val progressLabel = if (currentProgress.isNotBlank()) currentProgress else "Thinking..."
-                        Text(
-                            text = "• $progressLabel",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                shadow = Shadow(
-                                    color = Color.Black.copy(alpha = 0.8f),
-                                    offset = Offset(1f, 1f),
-                                    blurRadius = 3f,
-                                ),
-                            ),
-                            color = toneColor(tone).copy(alpha = pulseAlpha),
-                            modifier = Modifier.widthIn(max = 240.dp),
-                        )
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 248.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0xCC0B1220))
+                                .border(
+                                    1.dp,
+                                    toneColor(tone).copy(alpha = pulseAlpha * 0.8f),
+                                    RoundedCornerShape(14.dp),
+                                )
+                                .padding(horizontal = 11.dp, vertical = 7.dp),
+                        ) {
+                            Text(
+                                text = progressLabel,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFF1F5F9).copy(alpha = pulseAlpha),
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                     // CHAR-3: mood color crossfade + pop scale on change.
                     val baseBorderColor by animateColorAsState(
@@ -462,13 +481,16 @@ class CharacterOverlayService : Service() {
     }
 
     private fun toneColor(t: String): Color = when (t.lowercase()) {
-        "pouty", "sulky" -> Color(0xFFE879F9)        // Pouty magenta / moody violet
-        "candid", "candid_direct" -> Color(0xFFFFC14D) // Warm amber / playful
-        "firm", "firm_warning" -> Color(0xFFFF8A80)   // Coral red / alert
-        "warm", "validating" -> Color(0xFFA7F3C7)     // Mint green / supportive
-        "calm", "neutral" -> Color(0xFF93C5FD)        // Sky blue / relaxed
-        "excited" -> Color(0xFFFDE68A)                // Bright gold / energized
-        "melancholy" -> Color(0xFFB0BEC5)             // Muted blue-grey / down
+        "pouty" -> Color(0xFFE879F9)          // Pouty magenta
+        "sulky" -> Color(0xFFD8B4FE)          // Sulky violet
+        "candid", "candid_direct" -> Color(0xFFFDE047) // Warm yellow
+        "firm", "firm_warning" -> Color(0xFFF87171)    // Coral red
+        "warm" -> Color(0xFF86EFAC)           // Supportive mint
+        "validating" -> Color(0xFF67E8F9)     // Cyan
+        "calm", "neutral" -> Color(0xFF93C5FD) // Relaxed sky blue
+        "excited" -> Color(0xFFFDE68A)        // Energised gold
+        "melancholy" -> Color(0xFFB0BEC5)     // Muted blue-grey
+        "sleepy" -> Color(0xFFC4B5FD)         // Soft violet
         else -> Color(0xFF93C5FD)
     }
 
