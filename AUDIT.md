@@ -30,7 +30,7 @@ returns `INSTALL_FAILED_NO_MATCHING_ABIS`. Filed as a finding (`t_87cef44f`). Un
 "Verify on device" step in this document can be executed.
 
 Finding status:
-- **#1 — FIXED** (static verification; device test blocked by the ABI issue above).
+- **#1 — FIXED (device-verified 2026-10-01, task `t_77639e6c`)** — see finding #1 for evidence.
 - **#2, #3, #4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
@@ -45,7 +45,7 @@ fixes are committed yet.
 
 | # | Status | Severity | Area | Finding | File:line |
 |---|--------|----------|------|---------|-----------|
-| 1 | FIXED (static) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt:21`, `AndroidManifest.xml:96-97` |
+| 1 | FIXED (device-verified) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt`, `AndroidManifest.xml` |
 | 2 | OPEN | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:118-119` |
 | 3 | OPEN | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
 | 4 | OPEN | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
@@ -100,11 +100,25 @@ even require it to stay exported: `am broadcast -n <explicit component>` from th
 1. `adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver -a com.shiina.mobile.debug.SET_KEY --es provider gemini --es key TESTKEY` → succeeds (shell allowed).
 2. From a second normal (non-shell) app/UID, broadcast the same action → rejected, and no `SECURITY` log line appears in the debug server.
 
-**RESOLVED (working tree, uncommitted) — verified 2026-10-01:**
-- `debug/AdbTalkReceiver.kt:22` — early `if (!isTrustedCaller()) return`.
-- `debug/AdbTalkReceiver.kt:55-58` — `isTrustedCaller()` allows only `Process.myUid()` and `Process.SHELL_UID`.
-- `debug/AdbTalkReceiver.kt:27` — `ACTION_SET_KEY` additionally gated on `BuildConfig.DEBUG`.
-- Compiles clean. Device test above could not be run (see N3). Commit pending.
+**RESOLVED — verified on device 2026-10-01 (task `t_77639e6c`; Waydroid Android 13 / x86_64, app uid 10128):**
+- **Manifest guard (the actual enforcement):** `AndroidManifest.xml` now declares the receiver with
+  `android:permission="android.permission.DUMP"`. Only the adb shell (uid 2000) and system/privileged
+  callers hold DUMP, so AMS rejects a third-party broadcast **before `onReceive` runs**, on every
+  supported API level. `send.py` keeps working (shell holds DUMP).
+- **In-code hardening:** `ACTION_SET_KEY` is gated on `BuildConfig.DEBUG`; on API 34+
+  `isTrustedCaller()` allowlists the real sender uid via `BroadcastReceiver.getSentFromUid()`.
+- **⚠ Correction to the required-fix snippet above — `Binder.getCallingUid()` does NOT work here.**
+  In a broadcast callback the binder identity is already unwound, so it returns the *receiving app's
+  own* uid. Observed on device: a shell broadcast (uid 2000) logged `caller uid=10128 self=10128`,
+  i.e. the originally prescribed `uid != self && uid != SHELL_UID` check is always `false` and lets
+  **every** caller through. The manifest permission guard replaces it.
+- **Device evidence (3/3):**
+  1. `adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver -a …SET_KEY --es provider __verify --es key TESTKEY`
+     → accepted; `[SECURITY] API key added via ADB for provider: __verify` logged.
+  2. Same two actions broadcast from a third-party app (uid 10129, `com.attacker`) →
+     `BroadcastQueue: Permission Denial: … requires android.permission.DUMP`; **no** `SECURITY` log and no
+     `DebugTalkService` start (attacker text never processed).
+  3. `python3 send.py "hello"` → accepted + delivered: `[DEBUG_PANEL] You: hello`.
 
 ---
 
@@ -374,7 +388,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 
 | Finding | Task id | Title |
 |---------|---------|-------|
-| #1 | `t_77639e6c` | Harden exported AdbTalkReceiver (caller UID check, debug-only key sync) — **fix present in working tree, pending commit** |
+| #1 | `t_77639e6c` | Harden exported AdbTalkReceiver (manifest DUMP guard + debug-only key sync) — **FIXED, device-verified, committed** |
 | #2 | `t_731e89ab` | Unexport ProactiveLoop receiver (block forced LLM heartbeat ticks) |
 | #3 | `t_ad34b7f4` | Register MediaProjection.Callback before createVirtualDisplay |
 | #4 | `t_94c90291` | Persist procedural-memory usage counters |

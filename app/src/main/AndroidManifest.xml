@@ -94,7 +94,8 @@
         </receiver>
         <receiver
             android:name=".debug.AdbTalkReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.DUMP">
             <intent-filter>
                 <action android:name="com.shiina.mobile.debug.SEND_MESSAGE" />
                 <action android:name="com.shiina.mobile.debug.SET_KEY" />
