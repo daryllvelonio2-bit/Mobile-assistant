@@ -12,27 +12,60 @@ rule 12 = stability/perf/no leaks, rule 15 = TREE.md upkeep, rule 17 = on-demand
 
 ---
 
+## Verification pass — 2026-10-01 (task `t_9ada0fa2`)
+
+Re-verified the developer's in-flight work against the findings below. The working tree had
+diverged from the audited baseline `0e164be` with **uncommitted** WIP: 16 modified + 9 untracked
+files, consisting mainly of *feature* work (Phase 1 briefings, R2 voice input, R4 notification
+triage, R5 QS tile) rather than audit-finding fixes.
+
+Build gates re-run this pass:
+- `./gradlew :app:compileDebugKotlin --offline` → **BUILD SUCCESSFUL** (8m 30s).
+- `./gradlew :app:assembleDebug --offline` → **BUILD SUCCESSFUL**; APK at
+  `app/build/outputs/apk/debug/app-debug.apk` (65 MB).
+
+Device verification: **BLOCKED.** Target Waydroid `192.168.240.112:5555` is Android 13 on
+`x86_64`, but the APK ships only `lib/arm64-v8a` (`app/build.gradle.kts:18-20`); `adb install`
+returns `INSTALL_FAILED_NO_MATCHING_ABIS`. Filed as a finding (`t_87cef44f`). Until resolved no
+"Verify on device" step in this document can be executed.
+
+Finding status:
+- **#1 — FIXED** (static verification; device test blocked by the ABI issue above).
+- **#2, #3, #4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
+
+New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
+**N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
+
+---
+
 ## Severity summary
 
-| # | Severity | Area | Finding | File:line |
-|---|----------|------|---------|-----------|
-| 1 | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt:21`, `AndroidManifest.xml:96-97` |
-| 2 | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:118-119` |
-| 3 | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
-| 4 | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
-| 5 | MEDIUM | Privacy | Full prompts / full model+API responses logged to logcat in all builds | `AgentEngine.kt:360-367,444`, `GeminiProvider.kt:71-75,94` |
-| 6 | MEDIUM | Hygiene/Secrets | `.env` is tracked in git; `.gitignore` does not ignore it | `.env`, `.gitignore` |
-| 7 | MEDIUM | Rule 10 | Hardcoded `Color` values in Compose UI and notifications | `ShiinaVisuals.kt:115-146,350-357`, `DebugTalkService.kt:331`, `MainActivity.kt:414-415` |
-| 8 | LOW | Dead code | `KnowledgeNote` entity + DAO never registered in `AppDatabase`, never referenced | `KnowledgeNote.kt:1-48` |
-| 9 | LOW | Dead code | `structuredSchema` param is a no-op; `rawQuery(tone=)` ignored | `AgentEngine.kt:73,372-380` |
-| 10 | LOW | Perf/Lifecycle | `collectAsState()` used instead of `collectAsStateWithLifecycle()` (7 call sites) | see §10 |
-| 11 | LOW | Security | `MusicTracker` registers its receiver `RECEIVER_EXPORTED` for app-internal broadcasts | `MusicTracker.kt:91` |
-| 12 | LOW | Stability | Unparented coroutine scopes never cancelled | `DeviceActionController.kt:41`, `SettingsRepository.kt:22` |
-| 13 | LOW | Perf | `Thread.sleep(100)` busy-wait up to 2s while holding capture mutex | `ScreenshotTaker.kt:95-100` |
-| 14 | LOW | Robustness | `!!` on nullable SharedPreferences read | `UserActivityTracker.kt:29` |
-| 15 | LOW | Observability | Provider loop swallows all exceptions silently | `ProviderRegistry.kt:50` |
-| 16 | LOW | Rule 5 planning | Files at 847–1269 lines, approaching the 1500 limit | `DeviceActionController.kt`, `ShiinaAccessibilityService.kt`, `OnboardingScreen.kt` |
-| 17 | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
+Status: OPEN / FIXED. "FIXED" reflects a working-tree change verified statically; none of the
+fixes are committed yet.
+
+| # | Status | Severity | Area | Finding | File:line |
+|---|--------|----------|------|---------|-----------|
+| 1 | FIXED (static) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt:21`, `AndroidManifest.xml:96-97` |
+| 2 | OPEN | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:118-119` |
+| 3 | OPEN | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
+| 4 | OPEN | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
+| 5 | OPEN | MEDIUM | Privacy | Full prompts / full model+API responses logged to logcat in all builds | `AgentEngine.kt:360-367,444`, `GeminiProvider.kt:71-75,94` |
+| 6 | OPEN | MEDIUM | Hygiene/Secrets | `.env` is tracked in git; `.gitignore` does not ignore it | `.env`, `.gitignore` |
+| 7 | OPEN | MEDIUM | Rule 10 | Hardcoded `Color` values in Compose UI and notifications | `ShiinaVisuals.kt:115-146,350-357`, `DebugTalkService.kt:331`, `MainActivity.kt:414-415` |
+| 8 | OPEN | LOW | Dead code | `KnowledgeNote` entity + DAO never registered in `AppDatabase`, never referenced | `KnowledgeNote.kt:1-48` |
+| 9 | OPEN | LOW | Dead code | `structuredSchema` param is a no-op; `rawQuery(tone=)` ignored | `AgentEngine.kt:73,372-380` |
+| 10 | OPEN | LOW | Perf/Lifecycle | `collectAsState()` used instead of `collectAsStateWithLifecycle()` (7 call sites) | see §10 |
+| 11 | OPEN | LOW | Security | `MusicTracker` registers its receiver `RECEIVER_EXPORTED` for app-internal broadcasts | `MusicTracker.kt:91` |
+| 12 | OPEN | LOW | Stability | Unparented coroutine scopes never cancelled | `DeviceActionController.kt:41`, `SettingsRepository.kt:22` |
+| 13 | OPEN | LOW | Perf | `Thread.sleep(100)` busy-wait up to 2s while holding capture mutex | `ScreenshotTaker.kt:95-100` |
+| 14 | OPEN | LOW | Robustness | `!!` on nullable SharedPreferences read | `UserActivityTracker.kt:29` |
+| 15 | OPEN | LOW | Observability | Provider loop swallows all exceptions silently | `ProviderRegistry.kt:50` |
+| 16 | OPEN | LOW | Rule 5 planning | Files at 847–1269 lines, approaching the 1500 limit | `DeviceActionController.kt`, `ShiinaAccessibilityService.kt`, `OnboardingScreen.kt` |
+| 17 | OPEN | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
+| N1 | NEW | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
+| N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
+| N3 | NEW | MEDIUM | Infra | Debug APK is arm64-only; cannot install on x86_64 Waydroid — blocks all device verification | `app/build.gradle.kts:18-20` |
+| N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
 
 ---
 
@@ -67,6 +100,12 @@ even require it to stay exported: `am broadcast -n <explicit component>` from th
 1. `adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver -a com.shiina.mobile.debug.SET_KEY --es provider gemini --es key TESTKEY` → succeeds (shell allowed).
 2. From a second normal (non-shell) app/UID, broadcast the same action → rejected, and no `SECURITY` log line appears in the debug server.
 
+**RESOLVED (working tree, uncommitted) — verified 2026-10-01:**
+- `debug/AdbTalkReceiver.kt:22` — early `if (!isTrustedCaller()) return`.
+- `debug/AdbTalkReceiver.kt:55-58` — `isTrustedCaller()` allows only `Process.myUid()` and `Process.SHELL_UID`.
+- `debug/AdbTalkReceiver.kt:27` — `ACTION_SET_KEY` additionally gated on `BuildConfig.DEBUG`.
+- Compiles clean. Device test above could not be run (see N3). Commit pending.
+
 ---
 
 ### 2. `ProactiveLoop` receiver is exported — any app can force paid proactive heartbeat ticks
@@ -85,6 +124,10 @@ overlay interruptions. `BOOT_COMPLETED` never requires `exported="true"` — the
 is ever wanted, gate with a signature-level permission.
 
 **Verify:** `adb shell am broadcast -a com.shiina.mobile.action.PROACTIVE_TICK -n com.shiina.mobile/.action.ProactiveLoop` → `SecurityException`/`not exported`; reboot → boot restore still logs `BOOT_COMPLETED received; restoring proactive heartbeat loop`.
+
+**Re-verified 2026-10-01: STILL OPEN.** `AndroidManifest.xml:132` still `android:exported="true"` and
+`ProactiveLoop.kt:64` still has `else -> runTick(context)`. The large `ProactiveLoop.kt` rewrite this pass
+(Phase 1 briefings) did not touch either. Has developer task `t_731e89ab`.
 
 ---
 
@@ -110,6 +153,9 @@ and unregister/stop cleanly in `release()`.
 confirm a `cap_*.jpg` lands in `filesDir/captures` and `CAPTURE Saved …` is logged (not the
 `Capture skipped … no consent or accessibility screenshot available` fallback).
 
+**Re-verified 2026-10-01: STILL OPEN.** `grep registerCallback ScreenshotTaker.kt` → no match; file unchanged
+this pass. Developer task `t_ad34b7f4`.
+
 ---
 
 ### 4. Procedural-memory usage counters are mutated in memory but never written to disk
@@ -131,6 +177,9 @@ non-suspend reader while writers hold the coroutine `mutex` — that is also a l
 **Verify:** `GET_PROCEDURE` twice, force-stop the app, relaunch and `GET_PROCEDURE` again → `usageCount`
 reflects the accumulated count rather than resetting.
 
+**Re-verified 2026-10-01: STILL OPEN.** `ProceduralMemoryStore.kt:479` and `ToolDispatcher.kt:577` unchanged.
+Developer task `t_94c90291`.
+
 ---
 
 ### 5. Private content (prompts, model replies, raw API bodies) is logged to logcat in every build
@@ -150,6 +199,10 @@ redaction pass for `TOKEN_AUDIT`/`GEMINI_TALK_REQUEST`.
 
 **Verify:** assemble a release APK, send a chat turn, `adb logcat -d | grep GEMINI` → no prompt or response text present.
 
+**Re-verified 2026-10-01: STILL OPEN.** `grep BuildConfig AgentEngine.kt GeminiProvider.kt` → no match;
+`GEMINI_TALK_REQUEST` (AgentEngine.kt:367) and `GEMINI_RAW` (AgentEngine.kt:448) still log full bodies.
+Developer task `t_9833a73f`.
+
 ---
 
 ### 6. `.env` is committed and not ignored
@@ -165,6 +218,9 @@ dependency or un-ignore `monitor.py`.)
 
 **Verify:** `git ls-files | grep -qx .env && echo TRACKED || echo untracked` → `untracked`;
 `git check-ignore -v .env` → matches the new rule.
+
+**Re-verified 2026-10-01: STILL OPEN.** `git ls-files | grep -x .env` → `.env` (tracked); `.gitignore` still
+has no `env` rule; `.env.example` does not exist. Developer task `t_3690dae3`.
 
 ---
 
@@ -187,6 +243,8 @@ the base from theme tokens.
 **Verify:** `grep -rn "Color(0x\|Color\.White\|Color\.Black" app/src/main/java/com/shiina/mobile/ui` →
 only `theme/Color.kt` and intentional overlay scrim tokens remain.
 
+**Re-verified 2026-10-01: STILL OPEN.** `ShiinaVisuals.kt` not modified this pass. Developer task `t_ac953910`.
+
 ---
 
 ## LOW
@@ -198,11 +256,16 @@ returns only the file itself). It is also currently **untracked** in git. This i
 Phase 3 (knowledge capture). Either wire it into `AppDatabase` with a migration (version 12) and a consumer, or
 remove the file until Phase 3 begins.
 
+**Re-verified 2026-10-01: STILL OPEN** (still untracked/unwired). R1 (`t_d2173776`) is the task that will wire
+it; developer task `t_f6321785` should be reconciled with R1 rather than delete the file.
+
 ### 9. Dead code — no-op `structuredSchema` and ignored `rawQuery` parameter
 `AgentEngine.postText(prompt, attachShot, structuredSchema)` declares `structuredSchema` and then has an empty
 `if (structuredSchema) { /* commented-out response_schema */ }` block (`AgentEngine.kt:372-380`); the parameter
 has no effect. `rawQuery(prompt, tone, attachShot)` never uses `tone` (`AgentEngine.kt:73-75`). Remove the
 parameters or implement them; the commented-out schema should be deleted so it does not read as working code.
+
+**Re-verified 2026-10-01: STILL OPEN.** `AgentEngine.kt` `postText` signature unchanged in this respect.
 
 ### 10. `collectAsState()` instead of `collectAsStateWithLifecycle()`
 Call sites: `ui/chat/ChatScreen.kt:95-98`, `ui/settings/SettingsScreen.kt:86-95`,
@@ -212,10 +275,14 @@ Call sites: `ui/chat/ChatScreen.kt:95-98`, `ui/settings/SettingsScreen.kt:86-95`
 mechanical. Plain `collectAsState` keeps collecting Room/DataStore flows while the host is stopped
 (rule 12: no wasted work while off-screen).
 
+**Re-verified 2026-10-01: STILL OPEN.**
+
 ### 11. `MusicTracker` receiver registered as exported
 `observation/MusicTracker.kt:91` uses `Context.RECEIVER_EXPORTED` for app-internal music broadcasts.
 These are not system broadcasts the app must receive from others; use `Context.RECEIVER_NOT_EXPORTED`
 (hardening; also silences the Android 13+ exported flag lint warning).
+
+**Re-verified 2026-10-01: STILL OPEN.**
 
 ### 12. Unparented coroutine scopes
 `action/DeviceActionController.kt:41` — `CoroutineScope(Dispatchers.Main)` (no `SupervisorJob`, never
@@ -223,20 +290,30 @@ cancelled) and `data/settings/SettingsRepository.kt:22` — `CoroutineScope(Disp
 inside `init` (fire-and-forget collector that never completes and is never cancelled). Use
 `SupervisorJob()` + an explicit `close()`/`cancel()` lifecycle, or a lifecycle-scoped collector.
 
+**Re-verified 2026-10-01: STILL OPEN.** This pass added a *new* instance of the same pattern:
+`CompanionApp.observeNotificationTriage()` (`CompanionApp.kt:46-67`) launches another never-cancelled
+`CoroutineScope(SupervisorJob() + Dispatchers.IO)` collector. Fold it into this task.
+
 ### 13. Blocking busy-wait in screen capture
 `observation/ScreenshotTaker.kt:95-100` loops `repeat(20) { … Thread.sleep(100) }` — up to 2 s of blocked IO
 time **while holding `lock`** (`:53`), stalling concurrent captures. Use an `ImageReader.OnImageAvailableListener`
 or a bounded `delay()`-based wait inside the coroutine.
+
+**Re-verified 2026-10-01: STILL OPEN.**
 
 ### 14. Non-null assertion on a nullable prefs value
 `data/activity/UserActivityTracker.kt:29` — `prefs.getStringSet(KEY_HOURS, emptySet())!!`. `getStringSet`
 returns `StringSet?`; the `!!` will NPE if a malformed/legacy value is read. Use
 `.orEmpty().toMutableSet()`.
 
+**Re-verified 2026-10-01: STILL OPEN.**
+
 ### 15. Silent provider-failure swallow
 `decision/ProviderRegistry.kt:50` — `catch (_: Exception) { continue }` hides every provider failure with no
 log, so a permanently broken provider looks identical to a healthy one until the fallback path fires. Log the
 provider name + exception before continuing.
+
+**Re-verified 2026-10-01: STILL OPEN.**
 
 ### 16. Large files approaching the rule-5 limit
 - `action/DeviceActionController.kt` — **1269 lines**
@@ -246,10 +323,47 @@ Rule 5 forbids >1500 and asks that files approaching it be split. Suggested seam
 `MediaController` / `AppLauncher` / `SystemToggles` / `ScreenReader`; ShiinaAccessibilityService →
 `GestureRunner` / `ScreenReader` / `ChatConsult`; OnboardingScreen → one file per step composable.
 
+**Re-verified 2026-10-01: STILL OPEN.** Watch `action/ProactiveLoop.kt`, which grew substantially this pass
+(Phase 1 integration) and now exceeds 500 lines.
+
 ### 17. No per-turn cost guard in the agent loop
 `AgentEngine.kt:30` sets `MAX_AGENT_STEPS = 25`; `AgentEngine.kt:125-271` will issue up to 25 sequential
 Gemini calls if the model never returns `DONE`. Add a cumulative token/time budget (or lower the cap) so a
 looping model cannot burn quota silently.
+
+**Re-verified 2026-10-01: STILL OPEN.**
+
+---
+
+## New findings — 2026-10-01 verification pass
+
+### N1. Notification title/text reaches Gemini by default (summarization toggle defaults ON) — MEDIUM (privacy)
+`SettingsRepository.kt:152-153` defaults `notificationSummarizationEnabled` to `true`; `:141-142` defaults
+triage to `true`. `PromptAssembler.kt:117-124` injects `NotificationTriageEngine.promptBlock()` into **every**
+base prompt, and `NotificationTriageEngine.promptBlock()` (`:228-256`) embeds per-notification `title` + `text`
+bodies whenever `summarizationEnabled` is true. On a fresh install, third-party notification content
+(WhatsApp/Gmail/banking) is therefore sent to the cloud model without an explicit opt-in, contradicting R4's
+"only if enabled" intent. **Fix:** default `NOTIF_SUMMARY` to `false`. Developer task `t_61a50116`.
+
+### N2. `ChatBus.speaking` is dead state — the R2 echo gate cannot work — LOW (correctness)
+`ChatBus.kt:27-36` declares `_speaking`/`speaking`/`setSpeaking()` and documents that the push-to-talk mic
+hard-gates on it, but `grep -rn "setSpeaking" app/src/main/java/com/shiina/mobile/` returns only the
+definition — no caller. `VoiceInputEngine.kt:84` `start()` has no speaking check, so R2 will capture while
+TTS/clone audio plays (echo / self-interruption). **Fix:** bracket `VoiceCloneEngine.speak` and
+`ShiinaVoiceSpeaker` playback with `ChatBus.setSpeaking(true/false)` (the new `onComplete` hook fits) and have
+`VoiceInputEngine.start()` refuse while speaking. Developer task `t_8265ae80`.
+
+### N3. Debug APK is arm64-only — cannot install on x86_64 Waydroid — MEDIUM (verification infra)
+`app/build.gradle.kts:18-20` sets `abiFilters += listOf("arm64-v8a")`; the built APK contains only
+`lib/arm64-v8a`. Target Waydroid `192.168.240.112:5555` is `x86_64` (Android 13); `adb install -r` fails with
+`INSTALL_FAILED_NO_MATCHING_ABIS`. Every "Verify on device" step in this file and every Waydroid procedure in
+`RESEARCH_BACKLOG.md` is unrunnable until fixed. Developer task `t_87cef44f`.
+
+### N4. Duplicate notification stores retain text twice — LOW (architecture)
+`NotificationDigest.kt:19-52` and `NotificationTriageEngine.kt:50-135` are two independent in-memory stores of
+the same notifications (different caps/windows), both fed by `MusicNotificationListener` (`recordDigest` +
+`triage`, `seedDigest` + `seedTriage`). `NotificationDigest` has no mute/privacy gate. Consolidate so the
+digest derives from the triage engine. Developer task `t_aa09a8ac`.
 
 ---
 
@@ -260,7 +374,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 
 | Finding | Task id | Title |
 |---------|---------|-------|
-| #1 | `t_77639e6c` | Harden exported AdbTalkReceiver (caller UID check, debug-only key sync) |
+| #1 | `t_77639e6c` | Harden exported AdbTalkReceiver (caller UID check, debug-only key sync) — **fix present in working tree, pending commit** |
 | #2 | `t_731e89ab` | Unexport ProactiveLoop receiver (block forced LLM heartbeat ticks) |
 | #3 | `t_ad34b7f4` | Register MediaProjection.Callback before createVirtualDisplay |
 | #4 | `t_94c90291` | Persist procedural-memory usage counters |
@@ -271,6 +385,10 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 | #8, #9 | `t_f6321785` | Remove/wire dead code (KnowledgeNote, no-op structuredSchema, rawQuery tone) |
 | #11–#15 | `t_b1f98933` | Low-severity hardening (receiver flags, scopes, busy-wait, NPE, silent swallow) |
 | #16, #17 | `t_29262fd2` | Split large files (rule 5) and add agent-loop cost guard |
+| N1 | `t_61a50116` | Privacy: default notification summarization ON sends notification text to Gemini |
+| N2 | `t_8265ae80` | Wire ChatBus.speaking so the push-to-talk echo gate works |
+| N3 | `t_87cef44f` | Debug APK arm64-only — cannot install on x86_64 Waydroid |
+| N4 | `t_aa09a8ac` | Consolidate duplicate notification stores |
 
 Re-audit trigger: verify each task against the "Verify" section of its body when the developer
 completes it, then mark the corresponding AUDIT.md row resolved.
@@ -285,3 +403,6 @@ completes it, then mark the corresponding AUDIT.md row resolved.
 - Services cancel their scopes and unregister receivers in `onDestroy`
   (`CharacterOverlayService.kt:525-528`, `ShiinaAccessibilityService.kt:564-566`, `MusicTracker.stop()`).
 - No `runBlocking`, `GlobalScope`, or `allowMainThreadQueries` anywhere.
+- New this pass: the single-notification-listener constraint is respected — `NotificationTriageEngine` is a
+  delegate of the existing `MusicNotificationListener`, not a second `NotificationListenerService`.
+  `VoiceInputEngine.encodeWavPcm16` emits a correct 44-byte RIFF/WAVE header (unit-testable).
