@@ -66,6 +66,7 @@ fixes are committed yet.
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
 | N3 | NEW | MEDIUM | Infra | Debug APK is arm64-only; cannot install on x86_64 Waydroid — blocks all device verification | `app/build.gradle.kts:18-20` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
+| N5 | NEW | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
 
 ---
 
@@ -119,6 +120,38 @@ even require it to stay exported: `am broadcast -n <explicit component>` from th
      `BroadcastQueue: Permission Denial: … requires android.permission.DUMP`; **no** `SECURITY` log and no
      `DebugTalkService` start (attacker text never processed).
   3. `python3 send.py "hello"` → accepted + delivered: `[DEBUG_PANEL] You: hello`.
+
+**INDEPENDENT RE-VERIFICATION 2026-10-01 (task `t_ab4039e7`) — PASS, from commit `fedcc32` alone:**
+- **Build:** detached worktree at `fedcc32` (`git worktree add --detach /tmp/wt-fedcc32 fedcc32`) with the single
+  edit `abiFilters += listOf("arm64-v8a", "x86_64")` (`app/build.gradle.kts:20`) — needed only because the bundled
+  `libs/sherpa-onnx-1.13.8.aar` has no `jni/x86_64` (`unzip -l` → arm64-v8a + armeabi-v7a only), so the stock
+  arm64 APK cannot install on the x86_64 Waydroid target. `./gradlew :app:assembleDebug --offline` → BUILD
+  SUCCESSFUL; no app source was modified. Worktree deleted after the run.
+- **Tested class == committed class:** `md5sum` of `AdbTalkReceiver.kt` at `fedcc32` and in the working tree are
+  identical (`90c6b19a89ea5a0c2d601119bc9d4855`), and `aapt2 dump xmltree` on the installed APK shows
+  `permission="android.permission.DUMP"` + `exported=true` on `com.shiina.mobile.debug.AdbTalkReceiver`.
+- **No legitimate caller broken:** only `send.py` and the adb command line send `SEND_MESSAGE` / `SET_KEY`
+  (`grep -rn` over `app/src/main/java` → only the constants in `AdbTalkReceiver.kt:75-76`); in-app chat goes
+  `ChatSend.kt:19-22` → `DebugTalkService.ACTION_TALK` directly and never touches this receiver. The app itself
+  neither requests nor holds DUMP (`dumpsys package com.shiina.mobile` → no DUMP entry).
+- **Device battery (Waydroid Android 13 / x86_64, app uid 10128; `dumpsys` confirmed version 0.104.0/108
+  immediately before and after — the developer's concurrent 0.105.0/109 install was restored afterwards):**
+  1. PASS — `adb shell am broadcast … SET_KEY --es provider __verify --es key TESTKEY` →
+     `Broadcast completed: result=0` + `[SECURITY] API key added via ADB for provider: __verify`.
+  2. PASS — purpose-built third-party APK (`/tmp/audit_verify/attacker-unsigned.apk`, package `com.attacker`,
+     uid 10133, built outside this repo with aapt2/d8/apksigner) broadcasting both actions →
+     `BroadcastQueue: Permission Denial: broadcasting Intent { act=com.shiina.mobile.debug.SET_KEY … } from
+     com.attacker (pid=3101, uid=10133) … requires android.permission.DUMP`, and the same for `SEND_MESSAGE`;
+     **no** `SECURITY` log, no `DebugTalkService` start, attacker text never reached the agent loop. APK removed
+     afterwards. (Reproduced identically against the developer's own 0.104.0 build earlier in the run.)
+  3. PASS — `python3 send.py "audit clean-build check"` and `am broadcast … SEND_MESSAGE --es adb_text …` →
+     `[DEBUG_PANEL] You: …` with the pipeline running to `[GEMINI_FAIL] no gemini keys configured` (no key on the
+     test device — expected, zero API cost).
+- **Commit scope audited:** `git show fedcc32 --name-only` = `AUDIT.md`, `PROGRESS.md`, `app/build.gradle.kts`
+  (version 107→108 only), `app/src/main/AndroidManifest.xml` (receiver hunk only), `AdbTalkReceiver.kt`.
+  `.env` is **not** in the commit (still a staged deletion in the shared index).
+- **Residual risk:** the API-34+ sender allowlist would break the legitimate shell path on Android 14+ — see
+  new finding **N5** (`t_7283bc91`).
 
 ---
 
@@ -379,6 +412,30 @@ the same notifications (different caps/windows), both fed by `MusicNotificationL
 `triage`, `seedDigest` + `seedTriage`). `NotificationDigest` has no mute/privacy gate. Consolidate so the
 digest derives from the triage engine. Developer task `t_aa09a8ac`.
 
+### N5. API-34+ sender allowlist rejects the legitimate adb/shell path — HIGH (latent, API 34+ only)
+`AdbTalkReceiver.kt:68-72` (`isTrustedCaller()`) returns `false` on API 34+ unless `sentFromUid` is
+`Process.SHELL_UID` or `Process.myUid()`. `BroadcastReceiver.getSentFromUid()` returns `Process.INVALID_UID`
+when the receiver "cannot access the identity of the broadcasting app"
+(`developer.android.com/reference/android/content/BroadcastReceiver#getSentFromUid`), and the sender identity
+is only propagated when the **sender** opts in with `BroadcastOptions.setShareIdentityEnabled(true)`
+(`developer.android.com/privacy-and-security/risks/sender-of-pending-intents`). AOSP makes it explicit:
+`shareIdentity ? callingUid : Process.INVALID_UID` (`BroadcastController.java:1677-1682`,
+aosp-mirror/platform_frameworks_base@main). The shell never opts in — `ActivityManagerShellCommand.runSendBroadcast`
+(the implementation behind `am broadcast`) builds `BroadcastOptions` only for `--allow-background-activity-starts`
+and a temp-allowlist; the string `shareIdentity` does not appear in that file. Therefore on any API 34+ target
+(minSdk 26, **targetSdk 35**) a shell broadcast yields `INVALID_UID`, `isTrustedCaller()` returns `false`, and
+`send.py` / `send.py --sync-keys` are **silently dropped** — the same silent-no-op failure class the previous
+fix corrected. The allowlist adds no security: the manifest `android:permission="android.permission.DUMP"`
+guard (`AndroidManifest.xml:109-115`) already gated delivery, and `Process.myUid()` can never satisfy that guard
+(on device the app neither requests nor holds DUMP), so the extra check can only produce false negatives.
+**Not reproducible on this test rig** — Waydroid is API 33, so the branch is never taken; the finding rests on
+the platform contract and AOSP source cited above.
+**Fix:** `return sender == Process.INVALID_UID || sender == Process.SHELL_UID || sender == Process.myUid()`
+(or delete `isTrustedCaller()` and rely on the manifest permission guard, as the KDoc already argues).
+**Verify on API 34+:** `adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver
+-a com.shiina.mobile.debug.SEND_MESSAGE --es adb_text "hi"` → `[DEBUG_PANEL] You: hi`.
+Developer task `t_7283bc91`.
+
 ---
 
 ## Developer tasks spawned from this audit
@@ -403,6 +460,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 | N2 | `t_8265ae80` | Wire ChatBus.speaking so the push-to-talk echo gate works |
 | N3 | `t_87cef44f` | Debug APK arm64-only — cannot install on x86_64 Waydroid |
 | N4 | `t_aa09a8ac` | Consolidate duplicate notification stores |
+| N5 | `t_7283bc91` | Remove the API-34+ sender allowlist that silently drops adb-shell broadcasts |
 
 Re-audit trigger: verify each task against the "Verify" section of its body when the developer
 completes it, then mark the corresponding AUDIT.md row resolved.
