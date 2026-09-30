@@ -5,11 +5,15 @@ Maintained by the **researcher** role. Developer-ready specs are handed off as k
 feature tasks (one per feature, idempotency key `res-<slug>`).
 
 - Repo: `/home/janelle/Documents/GitHub/Mobile-assistant` (branch `agents/autodev`)
-- Basis: full survey of `agent.md`, `BUILD_PLAN.md`, `BACKLOG.md`, `PROGRESS.md`, `TREE.md`
-  and `app/src/main/java/com/shiina/mobile/` at `versionCode 107` / `versionName 0.103.4`,
+- Basis: full survey of `agent.md`, `BUILD_PLAN.md`, `BACKLOG.md`, `PROGRESS.md`, `TREE.md`,
+  `AUDIT.md` and `app/src/main/java/com/shiina/mobile/` at `versionCode 108` / `versionName 0.104.0`,
   plus external state-of-the-art research (citations inline).
 - Ordering: impact × readiness. New findings are inserted at the top of the *ranked list*;
   history is never deleted — entries are re-ranked and marked.
+- **Refresh 2026-10-01 (research task `t_63547052`):** R1–R7 are already on the board (see the
+  *previously ranked* section); this refresh adds **R8–R11**, grounded in the in-flight work now
+  visible in the tree (`CalendarReader.kt`, `NotificationTriageEngine.kt`, `ShiinaTileService.kt`,
+  `VoiceInputEngine.kt`, `KnowledgeNote.kt`). Nothing from R1–R7 was deleted or renumbered.
 
 ---
 
@@ -38,7 +42,196 @@ feature tasks (one per feature, idempotency key `res-<slug>`).
 
 ---
 
-## Ranked features
+## Ranked features — new in this refresh (R8–R11)
+
+> Ordered by impact × readiness against the state at `versionCode 108`. R8 (`t_b8d11611`) and R9
+> (`t_9db034ad`) are READY; R10 (`t_aaaf0aa2`, parent R1 `t_d2173776`) and R11 (`t_858c1a5c`,
+> parents R2 `t_b409f3bc` + R4 `t_0f8f3c7e`) are dependency-gated `todo` cards that the dispatcher
+> promotes automatically.
+
+### R8 — Calendar Write: "schedule this" event creation — READY
+**Impact: high (closes the temporal loop started by Phase 1 briefings). Readiness: high.**
+
+**Rationale.** Phase 1 (in-flight, `CalendarReader.kt`) makes Shiina *aware* of upcoming events via a
+read-only `CalendarContract.Instances` query. But the most common calendar ask is a *write* — "put
+lunch with Sam on my calendar tomorrow at 1", "block 90 minutes for the thesis at 3pm". Today there
+is **no CALENDAR tool** in `ToolCatalog.kt` and the manifest holds only `READ_CALENDAR`. Adding a
+write path means the next briefing can reference the event she just created: awareness + agency.
+
+**Exact files / areas to touch.**
+- New `observation/CalendarWriter.kt` (1 feature = 1 file).
+  `suspend fun createEvent(title, beginMillis, endMillis, location?, description?, allDay=false): CalendarWriteResult`.
+  Select a **writable** calendar by querying `CalendarContract.Calendars.CONTENT_URI`
+  (projection `_ID, CALENDAR_DISPLAY_NAME, ACCOUNT_NAME, ACCOUNT_TYPE, CALENDAR_ACCESS_LEVEL,
+  VISIBLE, SYNC_EVENTS, IS_PRIMARY`): require `CALENDAR_ACCESS_LEVEL >= CAL_ACCESS_CONTRIBUTOR`
+  and `VISIBLE=1`; **read-only calendars such as the holidays calendar have `CAL_ACCESS_READ` and
+  must be excluded**. Prefer `IS_PRIMARY=1`, else `ACCOUNT_TYPE_LOCAL`, else any writable.
+  No writable calendar → return `NoWritableCalendar` (never write to holidays).
+  Insert via `contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)` with the
+  **required** columns for a non-recurring event: `DTSTART`, `DTEND`, `TITLE`, `CALENDAR_ID`,
+  `EVENT_TIMEZONE` (`TimeZone.getDefault().id`) — see the Calendar Provider rules
+  (developer.android.com/identity/providers/calendar-provider).
+- **Dedupe (fixes the duplicate-on-retry failure seen live):** before insert, query `CalendarContract.Events`
+  for the same `TITLE` and a `DTSTART` within ±60 s; if present return `Duplicate(existingId)` and do
+  not insert. A retried/duplicated tool call must not create a second event.
+- `AndroidManifest.xml` — add `<uses-permission android:name="android.permission.WRITE_CALENDAR"/>`.
+- `ui/permissions/Permissions.kt` + `PermissionScreen.kt` — a Calendar row that requests both
+  READ and WRITE.
+- `decision/ToolCatalog.kt` + `ToolDispatcher.kt` — planner tool
+  `CREATE_CALENDAR_EVENT {title, date, time, duration_minutes, location?, description?, all_day?}`.
+  Parse natural dates (`today`, `tomorrow`, `<weekday>`) and times (`3pm`, `15:30`, `for 90 minutes`),
+  reusing/extending the `AgentStep` time parsing already used by `SET_ALARM`.
+- Fallback with no `WRITE_CALENDAR`: return `PermissionMissing` and offer the no-permission
+  `Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)` pre-filled with
+  `EXTRA_EVENT_BEGIN_TIME`/`END_TIME`/`TITLE`, which opens the calendar app for the user to confirm.
+- `decision/ShiinaPrompts.kt` — short rule: create events **only** when the user explicitly asks;
+  never invent attendees; state the resolved date/time back in one deadpan line (no double-confirm).
+
+**Design decision (fixed, do not re-decide):** v1 is a **direct provider insert** into the primary
+writable calendar when `WRITE_CALENDAR` is granted, with the `ACTION_INSERT` intent as fallback.
+**Recurring events (RRULE) are out of scope** for v1; all-day events are optional stretch.
+
+**Acceptance criteria.**
+1. "add lunch with Sam tomorrow 1pm for an hour" creates exactly one event in a writable calendar,
+   start = tomorrow 13:00 local, end = 14:00, correct `EVENT_TIMEZONE`.
+2. Read-only/holidays calendars are never chosen; with only read-only calendars present the tool
+   returns a clear "no writable calendar" result and falls back to the system insert intent — no crash.
+3. Re-issuing the same utterance (or the model calling the tool twice) does not create a duplicate
+   (dedupe by title + DTSTART ±60 s).
+4. Unit tests: time/date parsing (today/tomorrow/weekday, `3pm`, `15:30`, `for 90 minutes`, all-day);
+   writable-calendar selection (read-only excluded, primary preferred, local fallback);
+   dedupe window; `NoWritableCalendar` / `PermissionMissing` result mapping.
+5. READ granted but WRITE denied → `PermissionMissing`; the permissions row routes to system settings.
+6. `./gradlew assembleDebug` clean; version bumped +0.1.0/+1; `PROGRESS.md` and `TREE.md` updated.
+
+**Risks.** Provider absent or account-less on some builds/Waydroid (must degrade, not throw);
+DST/timezone (always store epoch millis + `EVENT_TIMEZONE`); duplicate storms (dedupe above);
+sync-adapter behaviour when `CALENDAR_ID` is chosen wrongly; permission UX wording.
+
+**Waydroid test procedure.**
+1. `adb shell pm grant com.shiina.mobile android.permission.READ_CALENDAR` and
+   `... android.permission.WRITE_CALENDAR`.
+2. On a build with no writable calendar, send the AC1 utterance → expect the "no writable calendar"
+   result + the system insert sheet, and **no** row created.
+3. On a device/emulator with a local calendar:
+   `adb shell content query --uri content://com.android.calendar/events --projection title,dtstart,dtend`
+   before and after → exactly one new row at the right epoch; repeat the utterance → still one row.
+
+---
+
+### R9 — Home-screen status widget (Jetpack Glance) — READY
+**Impact: medium-high (persistent presence + one-tap talk). Readiness: high.**
+
+**Rationale.** Presence today is a floating overlay bubble the user can hide, plus a Quick Settings
+tile (R5). A home-screen widget is the canonical always-visible companion surface: a mood orb, a
+one-line status (next event / pending digest count / days remembered) and a tap target that summons
+chat. Glance (1.1.x stable) gives a Compose-style widget API and the project already enables Compose.
+
+**Exact files / areas to touch.**
+- `gradle/libs.versions.toml` + `app/build.gradle.kts` — add
+  `androidx.glance:glance-appwidget:1.1.1` (and `glance-material3` if using the M3 wrapper).
+- New `ui/widget/ShiinaWidget.kt` — a `GlanceAppWidget` + `GlanceAppWidgetReceiver`. In
+  `provideGlance` (off the main thread) read: current mood (`MoodEngine`/`MoodState`), days-remembered
+  (`MemoryStore`/baseline), next event (`CalendarReader.upcomingEvents(24, 1)`) and pending triage
+  count (`NotificationTriageEngine.unreadCount()`). Render the existing orb drawable + one status line
+  + a button launching `MainActivity` with `EXTRA_SUMMON` (same flag R5 uses).
+- New `res/xml/shiina_widget_info.xml` (`<appwidget-provider>` with `initialLayout="@layout/glance_default_loading_layout"`).
+- `AndroidManifest.xml` — `<receiver android:exported="true">` with `APPWIDGET_UPDATE` +
+  `android.appwidget.provider` meta-data.
+- A tiny `ui/widget/ShiinaWidgetUpdater.kt` (or a call from `CharacterOverlayService` /
+  `NotificationTriageEngine` change hook) that pushes updates when mood or the triage count changes.
+  **Never poll every minute** — widgets live in a separate process and frequent updates drain battery
+  (developer.android.com/develop/ui/compose/glance).
+
+**Design decision (fixed):** the widget is **read-only + one summon button** in v1 — no interactive
+toggles. Glance composables must not be mixed with regular Compose UI; keep this file self-contained.
+
+**Acceptance criteria.**
+1. Widget is addable from the launcher widget picker; renders within a few seconds.
+2. Shows the mood and one grounded status line; tap opens chat with the overlay summoned.
+3. Updates when a triaged notification arrives and when the mood changes; does not poll per-minute.
+4. With calendar/notification permissions missing it falls back to a static greeting + mood — no crash.
+5. `assembleDebug` clean; version bumped; `TREE.md` updated (new `ui/widget/` package).
+
+**Risks.** Glance is a separate process/RemoteViews model (no shared composables); Room/DataStore reads
+inside `provideGlance` must be off the main thread; `CompanionApp`/DI access from the widget receiver;
+widget host quirks on Waydroid/Huawei.
+
+**Waydroid test procedure.** Launcher long-press → Widgets → add "Shiina"; verify via
+`adb shell dumpsys appwidget | grep -i shiina` that the provider is bound and updated; tap the widget →
+app opens on Chat with the overlay.
+
+---
+
+### R10 — Weekly Reflection Digest  *(gated on R1 — parents=[`t_d2173776`])* — GATED
+**Impact: medium-high. Readiness: medium (needs R1's `KnowledgeNote` store; goals and memory already exist).**
+
+**Rationale.** `NightlyReflection` and `MemoryCompactor` already distill memory in the background, but
+nothing user-facing closes the week. A Sunday-evening digest that writes one structured
+`KnowledgeNote(kind="reflection", topic="weekly")` — the week's captured notes, completed goals,
+habit/mood patterns and one focus for next week — turns raw capture into reflection. That is the
+"external brain" payoff the app promises.
+
+**Exact files / areas to touch.**
+- New `memory/WeeklyReflectionWorker.kt` (`CoroutineWorker`, existing `work-runtime`): reads
+  `KnowledgeNoteDao` (last 7 days), `GoalDao` (completed), `MemorySummary`; asks the existing Gemini
+  provider for a short structured summary; **deterministic template fallback** if the model is
+  unreachable (offline/dev). Writes exactly one note per ISO week.
+- `action/ProactiveLoop.kt` — surface the new reflection once (overlay/notification) on the chosen day.
+- `data/settings/SettingsRepository.kt` + `SettingsScreen.kt` — `weeklyReflectionEnabled`, day + hour.
+- `di/AppContainer.kt` — schedule the periodic worker (7-day interval, existing `BaselineWorker` pattern).
+
+**Design decision (fixed):** one note per ISO week, keyed idempotently by `topic="weekly:<year>-W<week>"`
+so re-runs do not duplicate; the model is optional (template fallback), never a hard dependency.
+
+**Acceptance criteria.** Worker writes exactly one reflection note per week even if run repeatedly;
+deterministic fallback when the provider fails; note appears in the R1 Journal; surfaced once; unit
+tests for the week-key + note assembly from a fixed input set.
+
+**Risks.** Depends on R1's schema/migration landing first (hence the parent gate); WorkManager periodic
+minimum is 15 min but 7-day cadence is fine; duplicate weeks if the key is computed inconsistently.
+
+---
+
+### R11 — Inline notification quick-reply via RemoteInput  *(gated on R2 + R4)* — GATED
+**Impact: medium-high (the Phase 4 "one-tap voice reply" goal is still uncovered). Readiness: medium (needs R2 + R4).**
+
+**Rationale.** R4 triages notification noise and R2 adds voice input, but Phase 4 also promises
+*replying* without opening the app. Android's platform mechanism is **Direct Reply** (`RemoteInput`):
+attach a reply action to Shiina's own digest/important notification so the user can type — or speak
+(R2) — a reply that is routed back into the source messaging app's own RemoteInput action, falling
+back to Shiina's chat when the source app does not expose one.
+
+**Exact files / areas to touch.**
+- `observation/NotificationTriageEngine.kt` — for `MESSAGE`-category posts, capture the source
+  `Notification.Action`s that carry a `RemoteInput` (key + `PendingIntent`) so a reply can be routed.
+- New `action/ReplyActionReceiver.kt` — a `BroadcastReceiver` for the reply `PendingIntent`; extract
+  text with `RemoteInput.getResultsFromIntent(intent)` and forward it to the source app's action, or
+  to Shiina's chat when absent; update the notification afterward (do not just dismiss it).
+- `character/CharacterOverlayService.kt` — the digest pill gains a reply affordance; R2's mic fills it.
+- `AndroidManifest.xml` — register the receiver (`exported="false"`, PendingIntent is explicit).
+- `data/settings/SettingsRepository.kt` — `inlineReplyEnabled` toggle.
+
+**Design decision (fixed):** v1 replies go to the **source app's own RemoteInput** when it exists;
+otherwise the text opens Shiina's chat pre-filled — never silently drop the reply. The reply action is
+only added to MESSAGE/EMAIL-category notifications, never to promos/system.
+
+**Acceptance criteria.** A messaging notification surfaces a Shiina "Reply" action; a typed reply is
+delivered to the source app and the notification updates to show it; a voice reply (R2) can fill the
+same field; an app with no RemoteInput action falls back to opening Shiina chat pre-filled; unit tests
+for RemoteInput extraction + fallback selection.
+
+**Risks.** Depends on R2 (voice) and R4 (triage) landing; grabbing another app's RemoteInput action is
+best-effort and OEM-dependent; PendingIntent mutability flags (API 31+ `FLAG_MUTABLE` is required for
+RemoteInput); privacy — never persist reply bodies.
+
+---
+
+## Ranked features (previously ranked — R1–R7, unchanged order)
+
+> R1–R7 below were ranked in the first research pass; their developer tasks already exist on the
+> board (R1 `t_d2173776`, R2 `t_b409f3bc`, R3 `t_1f30bc77`, R4 `t_0f8f3c7e`, R5 `t_a26db032`,
+> R6 `t_4a613f94`). Kept verbatim for history; re-ranked only relative to the new R8–R11 above.
 
 ### R1 — Knowledge Capture & Structured Journaling  *(BUILD_PLAN Phase 3)* — READY
 **Impact: very high. Readiness: high (scaffolding already on disk).**
@@ -315,8 +508,14 @@ embeddings are a separate model/dependency decision. Revisit once R1 is verified
 
 - **Hotspot — one file, many features:** `decision/PromptAssembler.kt`, `decision/ToolCatalog.kt`,
   `decision/ToolDispatcher.kt` and `ui/settings/MemoryPanel.kt` are touched by several cards (R1, R3,
-  R4). Land R1 first and keep those edits small/append-only to avoid merge collisions; flag if a
+  R4, R8). Land R1 first and keep those edits small/append-only to avoid merge collisions; flag if a
   file shows up in multiple in-flight diffs.
+- **Hotspot — notification surface:** `observation/NotificationTriageEngine.kt` is now touched by R4
+  (triage), R9 (widget reads `unreadCount`) and R11 (RemoteInput capture). Land R4 first; R9 should
+  only *read* it and R11 should extend it additively.
+- **Hotspot — calendar files:** `observation/CalendarReader.kt` (Phase 1, read) and the new
+  `observation/CalendarWriter.kt` (R8, write) must agree on the `CalendarEvent` shape; keep the write
+  path in its own file and reuse the reader's timezone handling.
 - **Hotspot — the single NotificationListenerService:** R4 must extend, never duplicate, the existing
   binding in `AndroidManifest.xml`.
 - **Room migrations are additive-only** (matches existing style). Every new entity = version bump +
@@ -326,6 +525,14 @@ embeddings are a separate model/dependency decision. Revisit once R1 is verified
   0.1.0 per update, update `PROGRESS.md` + `TREE.md`.
 
 ## Sources
+- Android Calendar Provider (read/write events, required columns, `WRITE_CALENDAR`,
+  `ACTION_INSERT` fallback, read-only holidays calendar): developer.android.com/identity/providers/calendar-provider;
+  `CalendarContract.Events` — developer.android.com/reference/android/provider/CalendarContract.Events.
+- Notification Direct Reply / `RemoteInput` (inline reply, `getResultsFromIntent`, PendingIntent flags):
+  developer.android.com/develop/ui/views/notifications; blog.michaelsam94.com/android-notification-inline-replies.
+- Jetpack Glance app widgets (`GlanceAppWidget`, `provideGlance`, update scheduling / battery guidance):
+  developer.android.com/develop/ui/compose/glance.
+- UsageStats API (existing wellbeing/binge gates): developer.android.com/reference/android/app/usage/UsageStatsManager.
 - Acoustic echo cancellation / barge-in on Android: `AcousticEchoCanceler`, `AudioRecord`
   `VOICE_COMMUNICATION` — developer.android.com/reference/android/media/audiofx/AcousticEchoCanceler.
 - Gemini Live API (real-time bidirectional audio): developer.android.com/ai/gemini/live;
@@ -342,3 +549,9 @@ embeddings are a separate model/dependency decision. Revisit once R1 is verified
 ## History
 - 2026-10-01 — Initial `RESEARCH_BACKLOG.md`. Survey at v0.103.4. Ranked R1–R7; created developer
   feature tasks for R1, R2, R4, R5, R6 and a dependency-gated task for R3 (parents = R2).
+- 2026-10-01 — Refresh (task `t_63547052`, survey at v0.104.0). Added **R8** (calendar write /
+  "schedule this"), **R9** (Glance home-screen status widget), **R10** (weekly reflection digest,
+  gated on R1), **R11** (inline notification quick-reply via RemoteInput, gated on R2+R4). Created
+  developer tasks with idempotency keys `res-calendar-write`, `res-glance-widget`,
+  `res-weekly-reflection`, `res-inline-reply`. R1–R7 kept verbatim in the *previously ranked* section;
+  no entries deleted or renumbered.
