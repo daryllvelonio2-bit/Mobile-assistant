@@ -39,7 +39,7 @@ Finding status:
 - **#7, #8–#17 — OPEN** (no working-tree change addresses them).
 - **N1 — FIXED (auditor-verified 2026-10-01, task `t_61a50116`; re-verified independently by `t_33feea82`)** — see finding N1 for evidence.
 - **N3 — FIXED (auditor-verified 2026-10-01, task `t_87cef44f`, commit `011b725`; verify task `t_7869a7c2`)** — see finding N3 for evidence.
-- **N5 — FIXED (device-verified 2026-10-01, task `t_7283bc91`)** — see finding N5 for evidence.
+- **N5 — FIXED (auditor-verified + device-verified 2026-10-01, task `t_7283bc91`; verify task `t_0a7be6fe`)** — see finding N5 for evidence.
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`), **N5** (`t_7283bc91`), **N6** (`t_f0960dc4`) — details in the *New findings* section below.
@@ -74,7 +74,7 @@ fixes are committed yet.
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
 | N3 | FIXED (device-verified + independently re-verified `t_7869a7c2`) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
-| N5 | FIXED (device-verified) | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
+| N5 | FIXED (auditor-verified + device-verified, `t_0a7be6fe`) | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
 | N6 | NEW | LOW | Privacy | Notification title written to logcat + loopback debug ring regardless of the model opt-in | `MusicNotificationListener.kt:84`, `DebugWebServer.kt:34-52` |
 
 ---
@@ -599,7 +599,7 @@ the same notifications (different caps/windows), both fed by `MusicNotificationL
 `triage`, `seedDigest` + `seedTriage`). `NotificationDigest` has no mute/privacy gate. Consolidate so the
 digest derives from the triage engine. Developer task `t_aa09a8ac`.
 
-### N5. API-34+ sender allowlist rejects the legitimate adb/shell path — FIXED (device-verified, task `t_7283bc91`)
+### N5. API-34+ sender allowlist rejects the legitimate adb/shell path — FIXED (auditor-verified + device-verified, task `t_7283bc91`)
 `AdbTalkReceiver.kt:68-72` (`isTrustedCaller()`) returns `false` on API 34+ unless `sentFromUid` is
 `Process.SHELL_UID` or `Process.myUid()`. `BroadcastReceiver.getSentFromUid()` returns `Process.INVALID_UID`
 when the receiver "cannot access the identity of the broadcasting app"
@@ -639,6 +639,41 @@ process stayed alive. **Note:** the API-34+ branch itself cannot be exercised on
 logic is covered by the JVM tests above rather than by device execution; the third-party-denial half of the
 manifest guard was already device-verified under finding #1.
 Developer task `t_7283bc91`.
+
+**Auditor re-verification (task `t_0a7be6fe`, independent, read-only, 2026-10-01) — PASS**, all claims
+reproduced against commit `c46ed35`:
+- **Source:** `git show c46ed35:…/AdbTalkReceiver.kt` md5 `ad852433…f1164` == the worktree copy (the commit,
+  not the shared WIP tree, is what compiles). `isTrustedSender(sdkInt, senderUid, selfUid)` accepts
+  `INVALID_UID`/`SHELL_UID`/`selfUid` on API 34+, is a no-op below 34; `callerUidToCheck(sdkInt) { sentFromUid }`
+  invokes the getter **only** inside the `sdkInt >= 34` branch (Kotlin lambda, so genuinely lazy). Commit scope:
+  `AUDIT.md`, `PROGRESS.md`, `TREE.md`, `app/build.gradle.kts` (version 114→115 only), `AdbTalkReceiver.kt`,
+  new `AdbTalkReceiverTrustTest.kt`; no `.env`.
+- **Platform contract (independent of the author):** `javap` against the installed SDK jars proves
+  `android.content.BroadcastReceiver.getSentFromUid()` **exists** in `platforms/android-34/android.jar` and is
+  **absent** from `platforms/android-33/android.jar` — so an unguarded read is a genuine runtime
+  `NoSuchMethodError` on the API 33 target (device `ro.build.version.sdk`=33). AOSP
+  `getSentFromUid()` returns `Process.INVALID_UID` when `mPendingResult == null`; and
+  `ActivityManagerShellCommand.java` contains **0** occurrences of `setShareIdentityEnabled`/`ShareIdentity`
+  (grep), so an `am broadcast` sender never shares identity → `INVALID_UID` on API 34+.
+- **JVM:** fresh detached worktree at `c46ed35`, `./gradlew :app:testDebugUnitTest --offline` →
+  `AdbTalkReceiverTrustTest` **7 tests / 0 failures / 0 errors** (`app/build/test-results/…xml`), whole suite
+  33/0/0. The lazy-read test is non-vacuous: it passes a lambda that *throws* `NoSuchMethodError` and asserts it
+  is never invoked below API 34.
+- **Device (Waydroid Android 13 / API 33 / x86_64):** I built `c46ed35` myself
+  (`:app:assembleDebug`, sha256 `169a6798…13d6b`, `lib/` = 9× x86_64 + 9× arm64-v8a), pushed it, verified the
+  device-side sha256, and `pm install -r -d` → `Success` (versionCode 115 / 0.111.0). On **my** build:
+  `am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver -a …SEND_MESSAGE --es adb_text 'n5audit hi'` →
+  `[DEBUG_PANEL] You: n5audit hi` **and** the pipeline ran to a model reply
+  `[DEBUG_PANEL] Shiina (excited): …`; `-a …SET_KEY --es provider __n5audit` →
+  `[SECURITY] API key added via ADB for provider: __n5audit`; over the whole logcat buffer **0**
+  `NoSuchMethodError`, **0** `FATAL EXCEPTION`, **0** `AndroidRuntime` lines; receiver pid 8607 unchanged
+  across both broadcasts.
+- **Residual (not a defect):** (a) the API-34+ branch is unreachable on this API 33 rig — it is covered by
+  the JVM tests + the platform contract above, not by device execution; an API 34+ emulator run is the only way
+  to *execute* it. (b) The "eager-read crash" the author describes was an **uncommitted intermediate** cut: the
+  parent commit `c46ed35~1` already early-returns on `< 34`, so it never crashed, and the reported crash is not
+  git-reproducible — the lazy-read property is instead proven by the unit test that feeds the guard a
+  throwing getter.
 
 ### N6. Notification titles go to logcat + the loopback debug ring even with the model opt-in off — LOW (privacy)
 `MusicNotificationListener.kt:84` logs the *title* of every triaged ping —
