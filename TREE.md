@@ -4,7 +4,8 @@ Current file structure and layout of the Mobile-assistant project.
 
 ```text
 Mobile-assistant/
-├── .env                        # Local environment variables & API keys (ignored by git)
+├── .env                        # Local environment variables & API keys (gitignored — never committed)
+├── .env.example                # Redacted key/config template (tracked) — copy to .env
 ├── agent.md                    # AI agent operating guidelines and rules
 ├── BACKLOG.md                  # Usability, interactivity, and architecture backlog
 ├── BUILD_PLAN.md               # Phase-by-phase implementation plan

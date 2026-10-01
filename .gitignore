@@ -30,3 +30,9 @@ local.properties
 # Python / temp files
 *.pyc
 monitor.py
+
+# Fleet runtime state (presence + message wall) — not source
+.fleet/
+
+# Secrets — never commit
+.env

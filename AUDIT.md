@@ -35,7 +35,8 @@ Finding status:
 - **#3 — FIXED (device-verified 2026-10-01, task `t_ad34b7f4`)** — see finding #3 for evidence.
 - **#4 — FIXED (device-verified 2026-10-01, task `t_94c90291`)** — see finding #4 for evidence.
 - **#5 — FIXED (device-verified 2026-10-01, task `t_9833a73f`)** — see finding #5 for evidence.
-- **#6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
+- **#6 — FIXED (git-verified 2026-10-01, task `t_3690dae3`)** — see finding #6 for evidence.
+- **#7, #8–#17 — OPEN** (no working-tree change addresses them).
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
@@ -370,8 +371,14 @@ dependency or un-ignore `monitor.py`.)
 **Verify:** `git ls-files | grep -qx .env && echo TRACKED || echo untracked` → `untracked`;
 `git check-ignore -v .env` → matches the new rule.
 
-**Re-verified 2026-10-01: STILL OPEN.** `git ls-files | grep -x .env` → `.env` (tracked); `.gitignore` still
-has no `env` rule; `.env.example` does not exist. Developer task `t_3690dae3`.
+**FIXED 2026-10-01 (git-verified)** — developer task `t_3690dae3`:
+- `.gitignore` now carries a `# Secrets — never commit` / `.env` rule (line 38) and `.fleet/` is ignored.
+- `.env` untracked via `git rm --cached .env` (local file preserved). `git ls-files | grep -qx .env` → **untracked**;
+  `git check-ignore -v .env` → `.gitignore:38:.env`.
+- `.env.example` added and tracked: the redacted template (`GEMINI_API_KEYS=`, `AI_PROVIDER_ORDER=`, …) so
+  `send.py --sync-keys` docs still apply; contains no real key.
+- `monitor.py` dependency documented in `send.py` (module docstring + import comment): `resolve_serial` comes
+  from the local, intentionally gitignored PC-only helper — keep `monitor.py` beside `send.py`.
 
 ---
 

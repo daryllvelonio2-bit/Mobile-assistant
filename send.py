@@ -6,6 +6,10 @@ Usage:
     python3 send.py -s 192.168.43.1:5555 "hello"
 
 Her reply streams into the monitor.py window / logcat.
+
+NOTE: this script imports `resolve_serial` from the local `monitor.py` helper,
+which is intentionally gitignored (a PC-only adb/logcat tool, not app source).
+Keep `monitor.py` next to `send.py` when running from a fresh checkout.
 """
 import argparse
 import os
@@ -13,7 +17,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from monitor import resolve_serial
+from monitor import resolve_serial  # local, gitignored helper — see module docstring
 
 ACTION = "com.shiina.mobile.debug.SEND_MESSAGE"
 
