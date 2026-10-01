@@ -379,6 +379,20 @@ dependency or un-ignore `monitor.py`.)
   `send.py --sync-keys` docs still apply; contains no real key.
 - `monitor.py` dependency documented in `send.py` (module docstring + import comment): `resolve_serial` comes
   from the local, intentionally gitignored PC-only helper — keep `monitor.py` beside `send.py`.
+- **Independent verification (auditor, task `t_a1f5d5b9`, 2026-10-01, read-only on commit `8edc219`):** all four
+  claims reproduced. `git ls-tree HEAD -- .env` and `git ls-files -s .env` → empty (index entry gone) while `.env`
+  is still on disk (511 B, mode 644) and `git check-ignore -v .env` → `.gitignore:38:.env` (and `.env` is *not*
+  ignored if it ever reappears — the rule matches by name, `.env.example` is correctly **not** ignored).
+  `.env.example` is tracked in HEAD (`blob bf39577`, `sha256 fe95d3f66cb2ff7d…` — matches the developer's claim)
+  and its committed bytes contain only empty `*_API_KEYS=` values plus non-secret config. `send.py` still
+  `py_compile`s, and `git show --name-only 8edc219` lists 7 files with **0** under `app/` (no `.kt`/`.kts`/`.xml`),
+  so this is config/docs-only — no app-code change. `.fleet/` has no tracked files, so ignoring it is clean.
+- **Residual (verified, not actionable now):** untracking removes `.env` only from the tip tree — the file stays
+  reachable in history (`8ce3d40:.env`) and at the *unchanged* tips of `origin/agents/autodev` and `origin/main`
+  (`blob 86c26b5`). A scan of all 582 reachable blobs found **zero** occurrences of the current local
+  `GEMINI_API_KEYS` value, and every committed `*_API_KEYS` value is the literal `[REDACTED]` placeholder, so no
+  rotation or `filter-repo` is needed today. If a real key is ever committed before this branch is pushed, rotate
+  it and rewrite history rather than relying on `git rm --cached`.
 
 ---
 
