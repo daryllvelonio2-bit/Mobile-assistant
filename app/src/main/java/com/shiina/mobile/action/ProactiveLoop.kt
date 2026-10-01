@@ -58,7 +58,10 @@ class ProactiveLoop : BroadcastReceiver() {
                         runTick(context)
                     }
                     else -> {
-                        runTick(context)
+                        // AUDIT finding #2: never let an unrecognized action spawn a paid
+                        // LLM turn. The receiver is also unexported in the manifest; this is
+                        // defence in depth so a future re-export cannot reopen the hole.
+                        AppDebugServer.log("LOOP", "ProactiveLoop ignored unknown action: ${intent.action}")
                     }
                 }
             } catch (e: Exception) {

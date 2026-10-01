@@ -31,7 +31,8 @@ returns `INSTALL_FAILED_NO_MATCHING_ABIS`. Filed as a finding (`t_87cef44f`). Un
 
 Finding status:
 - **#1 — FIXED (device-verified 2026-10-01, task `t_77639e6c`)** — see finding #1 for evidence.
-- **#2, #3, #4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
+- **#2 — FIXED (device-verified 2026-10-01, task `t_731e89ab`)** — see finding #2 for evidence.
+- **#3, #4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
@@ -46,7 +47,7 @@ fixes are committed yet.
 | # | Status | Severity | Area | Finding | File:line |
 |---|--------|----------|------|---------|-----------|
 | 1 | FIXED (device-verified) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt`, `AndroidManifest.xml` |
-| 2 | OPEN | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:118-119` |
+| 2 | FIXED (device-verified) | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:132-133` |
 | 3 | OPEN | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
 | 4 | OPEN | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
 | 5 | OPEN | MEDIUM | Privacy | Full prompts / full model+API responses logged to logcat in all builds | `AgentEngine.kt:360-367,444`, `GeminiProvider.kt:71-75,94` |
@@ -170,11 +171,42 @@ overlay interruptions. `BOOT_COMPLETED` never requires `exported="true"` — the
 **Required fix:** set `android:exported="false"` on the `.action.ProactiveLoop` receiver. If external triggering
 is ever wanted, gate with a signature-level permission.
 
+**RESOLVED — verified on device 2026-10-01 (task `t_731e89ab`; Waydroid Android 13 / x86_64, app uid
+10128, build 0.105.0 / versionCode 109):**
+- **Fix:** `AndroidManifest.xml` now declares the receiver `android:exported="false"` (was `"true"`).
+  `BOOT_COMPLETED` never required `exported="true"` (the system may target non-exported receivers),
+  and the alarm `PendingIntent` in `scheduleNextTick` is explicit and same-UID, so it is unaffected.
+- **Defence in depth:** the `else -> runTick(context)` fallback in `ProactiveLoop.onReceive` was
+  removed — an unrecognized action now logs `ProactiveLoop ignored unknown action: <action>` and
+  returns instead of starting a paid agent turn.
+- **Device evidence:**
+  1. Third-party app (`com.attacker2`, uid 10132, built for this test) broadcast all four attack
+     shapes — explicit `PROACTIVE_TICK`, explicit alternate `ACTION_PROACTIVE_TICK`, an unrecognized
+     action, and an implicit `PROACTIVE_TICK` — and every one was refused by AMS:
+     `BroadcastQueue: Permission Denial: broadcasting Intent { act=com.shiina.mobile.action.PROACTIVE_TICK … }
+     from com.attacker2 (pid=3285, uid=10132) to com.shiina.mobile/.action.ProactiveLoop is not exported
+     from uid 10128`. `adb logcat -s AppDebugServer` showed **zero** `[LOOP]` tick lines — no LLM call.
+     (The adb shell is equally refused: `… from null (pid=2862, uid=2000) … is not exported from uid 10128`.)
+  2. Cold boot (container restart) → `[LOOP] BOOT_COMPLETED received; restoring proactive heartbeat loop`
+     at 22:57:14, followed by `[LOOP] Next proactive tick scheduled by Shiina in 57m`.
+  3. `adb shell dumpsys alarm` after boot lists the live alarm
+     `RTC_WAKEUP #1: Alarm{5fd8587 … com.shiina.mobile} tag=*walarm*:com.shiina.mobile.action.PROACTIVE_TICK
+     origWhen=2026-09-30 23:54:14.771 … operation=PendingIntent{90b2cb4: PendingIntentRecord{89910dd
+     com.shiina.mobile broadcastIntent}}` — the explicit, same-UID PendingIntent that delivers the tick,
+     registered and pending while the receiver is `exported="false"`.
+  4. **Not observed in this session:** the natural delivery of that alarm. `setAndAllowWhileIdle`
+     alarms carry a flex window (here `window=+42m44s998ms`), so Android is allowed to batch/defer
+     delivery; 8 min past `origWhen` the alarm was still pending (`whenElapsed=-7m58s60ms`,
+     `maxWhenElapsed=+34m46s938ms`) and no `[LOOP]` line had appeared. This is normal Android flex
+     batching, not a regression from `exported=false` (delivery here is an explicit same-UID
+     `PendingIntent`, which Android never export-checks). The auditor should confirm the eventual
+     tick on the device.
+
 **Verify:** `adb shell am broadcast -a com.shiina.mobile.action.PROACTIVE_TICK -n com.shiina.mobile/.action.ProactiveLoop` → `SecurityException`/`not exported`; reboot → boot restore still logs `BOOT_COMPLETED received; restoring proactive heartbeat loop`.
 
-**Re-verified 2026-10-01: STILL OPEN.** `AndroidManifest.xml:132` still `android:exported="true"` and
-`ProactiveLoop.kt:64` still has `else -> runTick(context)`. The large `ProactiveLoop.kt` rewrite this pass
-(Phase 1 briefings) did not touch either. Has developer task `t_731e89ab`.
+**Re-verified 2026-10-01 (audit pass `t_9ada0fa2`):** was STILL OPEN at that time —
+`AndroidManifest.xml:132` was `android:exported="true"` and `ProactiveLoop.kt:64` still had
+`else -> runTick(context)`. Fixed the same day by developer task `t_731e89ab` (see RESOLVED above).
 
 ---
 

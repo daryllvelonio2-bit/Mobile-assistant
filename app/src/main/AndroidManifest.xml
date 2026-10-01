@@ -117,7 +117,7 @@
         </receiver>
         <receiver
             android:name=".action.ProactiveLoop"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="com.shiina.mobile.action.PROACTIVE_TICK" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
