@@ -51,8 +51,8 @@ class SystemContextAndSkillsTest {
         // floor and ceiling so playbooks can never silently vanish, nor the context balloon.
         assertTrue("Pure system context must stay rich (>= 6k chars), was: $charCount", charCount >= 6_000)
         assertTrue("Pure system context must stay bounded (<= 30k chars), was: $charCount", charCount <= 30_000)
-        assertTrue("Prompt version must be the deadpan-alive generation",
-            ShiinaPrompts.PROMPT_VERSION.startsWith("v9."))
+        assertTrue("Prompt version must be the persona-contract generation (v10+)",
+            ShiinaPrompts.PROMPT_VERSION.startsWith("v10."))
     }
 
     @Test
@@ -377,21 +377,30 @@ class SystemContextAndSkillsTest {
         val rules = ShiinaPrompts.GLOBAL_RULES
         val talkDrive = ShiinaPrompts.TALK_DRIVE
 
-        // Deadpan delivery.
-        assertTrue("GLOBAL_RULES must define the deadpan voice",
-            rules.contains("Voice: Deadpan."))
+        // v10 persona contract: the specific clause sentences this test guards.
+        // The exhaustive R1-R12 / banned-phrase scan lives in PersonaConformanceTest
+        // (task t_c6c49ded), so this test stays scoped to the voice, length and
+        // conversational-continuity clauses it is named after.
+        val requiredRulesSentences = mapOf(
+            "deadpan voice" to "Voice: deadpan.",
+            "unilateral agency heading" to "# Unilateral Agency",
+            "act-first-then-report" to "Act first, report afterwards as fact.",
+            "flat refusal as default answer" to "Your default answer to a request you disagree with is `No.`",
+            "flat `No.` is a complete answer" to "A flat `No.` is a complete answer.",
+            "deny-then-confess" to "Withhold, then confess flatly.",
+            "device control as leverage" to "Device control is leverage, not service.",
+            "escalation ladder" to "Escalate in stages, not paragraphs",
+            "body justification" to "Justify with the body, never with policy.",
+            "sideways answer (answer the real question)" to "Answer the question behind the question.",
+            "hard 1-3 line cap" to "One to three short lines, hard.",
+            "absolute ban on follow-up questions" to "Posing a follow-up question to keep the thread alive is banned outright",
+        )
+        for ((label, sentence) in requiredRulesSentences) {
+            assertTrue("GLOBAL_RULES must carry the v10 $label clause: \"$sentence\"",
+                rules.contains(sentence))
+        }
 
-        // Human register: text a person, not an assistant.
-        assertTrue("Must require talking like a human",
-            rules.contains("Talk like a human, not a helper"))
-        assertTrue("Must define the human length register",
-            rules.contains("# Human Length & Register"))
-        assertTrue("Default must be short, human-sized replies",
-            rules.contains("Short by default: one or two lines"))
-        assertTrue("Must forbid interviewing the user every turn",
-            rules.contains("Do not end every message with a question"))
-
-        // The earlier over-correction (a mandatory multi-sentence floor) must be gone.
+        // The earlier over-correction (a mandatory multi-sentence floor) must stay gone.
         assertFalse("No rigid multi-sentence length floor may be enforced",
             rules.contains("LENGTH FLOOR") || rules.contains("2-5 full sentences"))
 
@@ -400,8 +409,21 @@ class SystemContextAndSkillsTest {
             talkDrive.contains("Continuous Thread"))
         assertTrue("TALK_DRIVE must carry topics forward rather than drop them",
             talkDrive.contains("Carry Forward"))
-        assertTrue("TALK_DRIVE must forbid dead-end replies",
+        assertTrue("TALK_DRIVE must let a flat `No.` end a turn cleanly",
+            talkDrive.contains("A flat `No.` ends a turn cleanly."))
+
+        // Removed v9 wording must not be restored (PERSONA_GAP.md R5 BLOCKER:
+        // "No Dead Ends" forbade the persona-defining flat `No.`).
+        assertFalse("GLOBAL_RULES must not restore the removed \"No Dead Ends\" rule",
+            rules.contains("No Dead Ends"))
+        assertFalse("TALK_DRIVE must not restore the removed \"No Dead Ends\" rule",
             talkDrive.contains("No Dead Ends"))
+        assertFalse("GLOBAL_RULES must not restore the removed helper register",
+            rules.contains("Talk like a human, not a helper"))
+        assertFalse("GLOBAL_RULES must not restore the removed \"# Human Length & Register\" heading",
+            rules.contains("# Human Length & Register"))
+        assertFalse("GLOBAL_RULES must not restore the removed default-length wording",
+            rules.contains("Short by default: one or two lines"))
 
         // The old session-reset wording must be gone.
         assertFalse("Anti-clinging must no longer forbid continuing a thread",
