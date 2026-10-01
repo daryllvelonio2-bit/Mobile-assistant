@@ -13,8 +13,8 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 109
-        versionName = "0.105.0"
+        versionCode = 110
+        versionName = "0.106.0"
         ndk {
             // sherpa-onnx ships arm64 + arm32; arm64-only keeps the APK lean (JNY-LX1 is arm64).
             abiFilters += listOf("arm64-v8a")

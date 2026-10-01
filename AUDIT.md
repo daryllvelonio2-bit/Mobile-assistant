@@ -32,7 +32,8 @@ returns `INSTALL_FAILED_NO_MATCHING_ABIS`. Filed as a finding (`t_87cef44f`). Un
 Finding status:
 - **#1 — FIXED (device-verified 2026-10-01, task `t_77639e6c`)** — see finding #1 for evidence.
 - **#2 — FIXED (device-verified 2026-10-01, task `t_731e89ab`)** — see finding #2 for evidence.
-- **#3, #4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
+- **#3 — FIXED (device-verified 2026-10-01, task `t_ad34b7f4`)** — see finding #3 for evidence.
+- **#4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
@@ -48,7 +49,7 @@ fixes are committed yet.
 |---|--------|----------|------|---------|-----------|
 | 1 | FIXED (device-verified) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt`, `AndroidManifest.xml` |
 | 2 | FIXED (device-verified) | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:132-133` |
-| 3 | OPEN | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
+| 3 | FIXED (device-verified) | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
 | 4 | OPEN | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
 | 5 | OPEN | MEDIUM | Privacy | Full prompts / full model+API responses logged to logcat in all builds | `AgentEngine.kt:360-367,444`, `GeminiProvider.kt:71-75,94` |
 | 6 | OPEN | MEDIUM | Hygiene/Secrets | `.env` is tracked in git; `.gitignore` does not ignore it | `.env`, `.gitignore` |
@@ -232,8 +233,45 @@ and unregister/stop cleanly in `release()`.
 confirm a `cap_*.jpg` lands in `filesDir/captures` and `CAPTURE Saved …` is logged (not the
 `Capture skipped … no consent or accessibility screenshot available` fallback).
 
-**Re-verified 2026-10-01: STILL OPEN.** `grep registerCallback ScreenshotTaker.kt` → no match; file unchanged
-this pass. Developer task `t_ad34b7f4`.
+**Re-verified 2026-10-01: FIXED (device-verified), task `t_ad34b7f4`.**
+
+**Fix (`ScreenshotTaker.kt`):** `setProjection` now registers a `MediaProjection.Callback` on the main
+looper *before* the projection is stored and before any `createVirtualDisplay`; the callback is kept in
+`projectionCallback` and `release()` unregisters it (then stops the projection). `onStop` calls
+`release()` so a system-initiated teardown (user taps **Stop** in the projection dialog) drops the dead
+projection instead of reusing it. `setProjection`/`release` are `@Synchronized`.
+
+```kotlin
+private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+@Volatile private var projectionCallback: MediaProjection.Callback? = null
+
+@Synchronized fun setProjection(mp: MediaProjection) {
+    release()
+    val callback = object : MediaProjection.Callback() {
+        override fun onStop() { release() }
+    }
+    mp.registerCallback(callback, mainHandler)   // registered BEFORE any createVirtualDisplay
+    projectionCallback = callback
+    projection = mp
+}
+
+@Synchronized fun release() {
+    val mp = projection; val callback = projectionCallback
+    projection = null; projectionCallback = null
+    if (mp != null && callback != null) runCatching { mp.unregisterCallback(callback) }
+    runCatching { mp?.stop() }
+}
+```
+
+**Verified on Waydroid (Android 13 / API 33, x86_64), 2/2 independent runs (fresh process each time):**
+screenshot toggle enabled, `MediaProjection` consent granted → `CAPTURE Projection ready (consent
+granted, callback registered)`; a subsequent capture through the projection path logged
+`CAPTURE Trigger app:…: roll=0.055` → `CAPTURE Saved cap_…jpg (18KB, 480x1040 -> 472x1024,
+reason=app_…)`. The message carries **no `via Accessibility` suffix**, so it came from
+`grabFrame`/`createVirtualDisplay`, not the `a11y.captureScreenshot()` fallback; the
+`Capture skipped (…): no consent or accessibility screenshot available` line occurred **0 times**.
+(The callback requirement is API 34+; the fleet Waydroid is API 33, so the *requirement* itself cannot
+be reproduced there — the fix is confirmed to register the callback and to not regress capture.)
 
 ---
 
@@ -479,7 +517,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 |---------|---------|-------|
 | #1 | `t_77639e6c` | Harden exported AdbTalkReceiver (manifest DUMP guard + debug-only key sync) — **FIXED, device-verified, committed** |
 | #2 | `t_731e89ab` | Unexport ProactiveLoop receiver (block forced LLM heartbeat ticks) |
-| #3 | `t_ad34b7f4` | Register MediaProjection.Callback before createVirtualDisplay |
+| #3 | `t_ad34b7f4` | Register MediaProjection.Callback before createVirtualDisplay — **FIXED, device-verified, committed** |
 | #4 | `t_94c90291` | Persist procedural-memory usage counters |
 | #5 | `t_9833a73f` | Gate verbose prompt/response logging behind BuildConfig.DEBUG |
 | #6 | `t_3690dae3` | Untrack .env, add to .gitignore, add .env.example |

@@ -35,18 +35,46 @@ class ScreenshotTaker(
     private val lock = Mutex()
 
     @Volatile private var projection: MediaProjection? = null
+
+    /**
+     * Android 14+ (API 34+) requires a [MediaProjection.Callback] to be registered before
+     * [MediaProjection.createVirtualDisplay] is called; without one the system throws and capture
+     * silently degrades to the accessibility fallback. We also need the callback to notice a
+     * system-initiated stop (user taps "Stop" in the projection dialog) so we drop the dead
+     * projection instead of reusing it.
+     */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile private var projectionCallback: MediaProjection.Callback? = null
+
     val ready: Boolean get() = projection != null ||
             (com.shiina.mobile.action.ShiinaAccessibilityService.isEnabled && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R)
 
+    @Synchronized
     fun setProjection(mp: MediaProjection) {
         release()
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                // System tore the session down; release() clears the now-dead projection so the
+                // next capture falls back instead of failing on a stopped projection.
+                release()
+            }
+        }
+        mp.registerCallback(callback, mainHandler)
+        projectionCallback = callback
         projection = mp
-        AppDebugServer.log("CAPTURE", "Projection ready (consent granted)")
+        AppDebugServer.log("CAPTURE", "Projection ready (consent granted, callback registered)")
     }
 
+    @Synchronized
     fun release() {
-        runCatching { projection?.stop() }
+        val mp = projection
+        val callback = projectionCallback
         projection = null
+        projectionCallback = null
+        if (mp != null && callback != null) {
+            runCatching { mp.unregisterCallback(callback) }
+        }
+        runCatching { mp?.stop() }
     }
 
     suspend fun capture(reason: String): File? = withContext(Dispatchers.IO) {
