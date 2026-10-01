@@ -145,7 +145,11 @@ data class AgentRunResult(
                     }
                     AppDebugServer.log(
                         "GEMINI_TALK_PARSED",
-                        "Agent step #${calls + 1}: mood=${step.mood}, status=${step.status}, tool=${step.tool}, nextCheckIn=${step.nextCheckInMinutes}, thought=\"${step.thought.take(120)}\", message=\"${step.message.take(400)}\"",
+                        "Agent step #${calls + 1}: mood=${step.mood}, status=${step.status}, tool=${step.tool}, nextCheckIn=${step.nextCheckInMinutes}, thoughtLen=${step.thought.length}, messageLen=${step.message.length}",
+                    )
+                    AppDebugServer.logPayload(
+                        "GEMINI_TALK_PARSED_BODY",
+                        "Agent step #${calls + 1} content: thought=\"${step.thought.take(120)}\", message=\"${step.message.take(400)}\"",
                     )
                 }
 
@@ -361,7 +365,7 @@ data class AgentRunResult(
             "TOKEN_AUDIT",
             "Turn request payload: ~$totalTokensEst tokens (text: ~$textTokensEst, image: ${if (imageBytesCount > 0) "~258 tokens (${imageBytesCount / 1024}KB)" else "0 tokens"}), promptLength=${prompt.length}",
         )
-        AppDebugServer.log(
+        AppDebugServer.logPayload(
             "GEMINI_TALK_REQUEST",
             "Talk prompt:\n$prompt" + if (imageBytesCount > 0) " [screenshot attached: ${imageBytesCount / 1024}KB]" else "",
         )
@@ -412,7 +416,8 @@ data class AgentRunResult(
                 http.newCall(request).execute().use { response ->
                     val code = response.code
                     val respBody = response.body?.string().orEmpty()
-                    AppDebugServer.log("GEMINI_NET", "API response code=$code bodyLen=${respBody.length}: ${respBody.take(400)}")
+                    AppDebugServer.log("GEMINI_NET", "API response code=$code bodyLen=${respBody.length}")
+                    AppDebugServer.logPayload("GEMINI_NET_BODY", "API response body: ${respBody.take(400)}")
                     if (!response.isSuccessful) {
                         lastFailure = "HTTP $code from $currentModel: ${respBody.take(300)}"
                         if (code == 429) {
@@ -441,7 +446,8 @@ data class AgentRunResult(
             }
 
             if (raw.isNotBlank()) {
-                AppDebugServer.log("GEMINI_RAW", "Raw API response length=${raw.length}: ${raw}")
+                AppDebugServer.log("GEMINI_RAW", "Raw API response length=${raw.length}")
+                AppDebugServer.logPayload("GEMINI_RAW_BODY", raw)
                 val json = runCatching { JSONObject(raw) }.getOrNull()
                 val candidate = json?.optJSONArray("candidates")?.optJSONObject(0)
                 val finishReason = candidate?.optString("finishReason", "")

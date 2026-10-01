@@ -1,6 +1,7 @@
 package com.shiina.mobile.debug
 
 import android.util.Log
+import com.shiina.mobile.BuildConfig
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetAddress
@@ -48,6 +49,16 @@ object AppDebugServer {
                 Log.d("AppDebugServer", "[$category] [part ${i + 1}/$totalParts] $partContent")
             }
         }
+    }
+
+    /**
+     * AUDIT #5 (privacy): payload logging (prompts, model replies, raw API bodies) is
+     * verbose-only. In release builds the sensitive body is never written to logcat or the
+     * loopback event ring; callers still emit a category/size line via [log].
+     */
+    fun logPayload(category: String, message: String) {
+        if (!BuildConfig.DEBUG) return
+        log(category, message)
     }
 
     fun start() {

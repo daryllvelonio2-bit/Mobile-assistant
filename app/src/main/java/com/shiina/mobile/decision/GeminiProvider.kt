@@ -68,7 +68,7 @@ class GeminiProvider(
                 com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Attached screenshot: ${latestCap.name}")
             }
 
-            com.shiina.mobile.debug.AppDebugServer.log(
+            com.shiina.mobile.debug.AppDebugServer.logPayload(
                 "GEMINI_REQUEST",
                 "Prompt (senses, baseline, memory, rules):\n$promptText" +
                     if (screenshotAttached) "\n[Attached screenshot: ${latestCap?.name}]" else ""
@@ -91,7 +91,8 @@ class GeminiProvider(
                     throw IllegalStateException("gemini $code")
                 }
                 val respStr = response.body?.string().orEmpty()
-                com.shiina.mobile.debug.AppDebugServer.log("GEMINI_RESPONSE", "Raw response:\n$respStr")
+                com.shiina.mobile.debug.AppDebugServer.log("GEMINI_RESPONSE", "Raw response length=${respStr.length}")
+                com.shiina.mobile.debug.AppDebugServer.logPayload("GEMINI_RESPONSE_BODY", respStr)
                 com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "API success response received")
                 parse(respStr, summary)
             }
@@ -226,7 +227,11 @@ class GeminiProvider(
             }
             com.shiina.mobile.debug.AppDebugServer.log(
                 "GEMINI_PARSED",
-                "Parsed decision: should_interrupt=$interrupt, confidence=$confidence, reason=$reason, tone=$tone, action=$action, param=$param, message=$rawMessage, extras=$extras"
+                "Parsed decision: should_interrupt=$interrupt, confidence=$confidence, tone=$tone, action=$action, actionParamLen=${param.length}"
+            )
+            com.shiina.mobile.debug.AppDebugServer.logPayload(
+                "GEMINI_PARSED_BODY",
+                "Parsed decision content: reason=$reason, actionParam=$param, message=$rawMessage, extras=$extras"
             )
             // LOOP-2: non-interrupting rounds keep silent chores (and only
             // those) — everything else is forced to NONE so she can do
@@ -247,8 +252,9 @@ class GeminiProvider(
         } catch (e: Exception) {
             com.shiina.mobile.debug.AppDebugServer.log(
                 "GEMINI_PARSE_ERROR",
-                "Failed to parse Gemini response: ${e.message}\nBody was: $body\nFalling back to rule-based decision."
+                "Failed to parse Gemini response (bodyLen=${body.length}): ${e.message}\nFalling back to rule-based decision."
             )
+            com.shiina.mobile.debug.AppDebugServer.logPayload("GEMINI_PARSE_ERROR_BODY", "Body was: $body")
             ruleBased(summary)
         }
     }

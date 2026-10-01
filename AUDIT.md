@@ -33,7 +33,9 @@ Finding status:
 - **#1 — FIXED (device-verified 2026-10-01, task `t_77639e6c`)** — see finding #1 for evidence.
 - **#2 — FIXED (device-verified 2026-10-01, task `t_731e89ab`)** — see finding #2 for evidence.
 - **#3 — FIXED (device-verified 2026-10-01, task `t_ad34b7f4`)** — see finding #3 for evidence.
-- **#4, #5, #6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
+- **#4 — FIXED (device-verified 2026-10-01, task `t_94c90291`)** — see finding #4 for evidence.
+- **#5 — FIXED (device-verified 2026-10-01, task `t_9833a73f`)** — see finding #5 for evidence.
+- **#6, #7, #8–#17 — OPEN** (no working-tree change addresses them).
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
@@ -331,9 +333,26 @@ redaction pass for `TOKEN_AUDIT`/`GEMINI_TALK_REQUEST`.
 
 **Verify:** assemble a release APK, send a chat turn, `adb logcat -d | grep GEMINI` → no prompt or response text present.
 
-**Re-verified 2026-10-01: STILL OPEN.** `grep BuildConfig AgentEngine.kt GeminiProvider.kt` → no match;
-`GEMINI_TALK_REQUEST` (AgentEngine.kt:367) and `GEMINI_RAW` (AgentEngine.kt:448) still log full bodies.
-Developer task `t_9833a73f`.
+**FIXED (device-verified 2026-10-01, task `t_9833a73f`, commit on `agents/autodev`).** Payload logging now
+routes through a new `AppDebugServer.logPayload(...)` that is a no-op unless `BuildConfig.DEBUG`; every
+sensitive body moved behind it while a category/size line is still emitted unconditionally in release:
+- `AgentEngine`: `GEMINI_TALK_REQUEST` prompt body, `GEMINI_NET` response preview → `GEMINI_NET_BODY`,
+  `GEMINI_RAW` raw JSON → `GEMINI_RAW_BODY`, and `GEMINI_TALK_PARSED` thought/message →
+  `GEMINI_TALK_PARSED_BODY` (the structural line keeps mood/status/tool/nextCheckIn + lengths).
+- `GeminiProvider`: `GEMINI_REQUEST` prompt, `GEMINI_RESPONSE` raw body → `GEMINI_RESPONSE_BODY`,
+  `GEMINI_PARSE_ERROR` body → `GEMINI_PARSE_ERROR_BODY`, `GEMINI_PARSED` reason/message →
+  `GEMINI_PARSED_BODY`.
+- `DebugTalkService`: the raw chat lines (`You:` / `Shiina:` replies incl. boot greeting) now go through a
+  debug-only `dbgContent()`.
+
+**Verify (release APK signed with the debug key, Waydroid API 33 x86_64):** one chat turn → logcat shows only
+`TOKEN_AUDIT … promptLength=…`, `GEMINI_NET API response code=… bodyLen=…`, `GEMINI_RAW Raw API response
+length=…` — **0** matches for the prompt text, the typed message, or any response body. The debug APK still
+logs the full prompt and bodies (unchanged in debug).
+
+**Residual (same class, outside this task's named scope):** `ShiinaAccessibilityService` verdict logs,
+`TRIGGER` text, and `LEARNED_MEMORY` facts still embed model/memory content in logcat — recommend a follow-up
+finding. Developer task `t_9833a73f`.
 
 ---
 
@@ -534,7 +553,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 | #2 | `t_731e89ab` | Unexport ProactiveLoop receiver (block forced LLM heartbeat ticks) |
 | #3 | `t_ad34b7f4` | Register MediaProjection.Callback before createVirtualDisplay — **FIXED, device-verified, committed** |
 | #4 | `t_94c90291` | Persist procedural-memory usage counters |
-| #5 | `t_9833a73f` | Gate verbose prompt/response logging behind BuildConfig.DEBUG |
+| #5 | `t_9833a73f` | Gate verbose prompt/response logging behind BuildConfig.DEBUG — **FIXED, device-verified, committed** |
 | #6 | `t_3690dae3` | Untrack .env, add to .gitignore, add .env.example |
 | #7 | `t_ac953910` | Move hardcoded colors into Material 3 theme tokens |
 | #10 | `t_bcddc21d` | Use collectAsStateWithLifecycle |

@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
+import com.shiina.mobile.BuildConfig
 import com.shiina.mobile.CompanionApp
 import com.shiina.mobile.character.CharacterMode
 import com.shiina.mobile.character.CharacterOverlayService
@@ -129,6 +130,15 @@ class DebugTalkService : Service() {
         if (logsEnabled) AppDebugServer.log("DEBUG_PANEL", msg)
     }
 
+    /**
+     * AUDIT #5 (privacy): raw chat content (the user's typed text and Shiina's replies)
+     * must never reach logcat in a release build. Unlike [dbg], this is a no-op unless the
+     * app is a debug build — and still respects the panel's logs toggle.
+     */
+    private fun dbgContent(msg: String) {
+        if (BuildConfig.DEBUG && logsEnabled) AppDebugServer.log("DEBUG_PANEL", msg)
+    }
+
     private fun renderLatest() {
         scope.launch {
             runCatching {
@@ -193,7 +203,7 @@ class DebugTalkService : Service() {
             intent.getStringExtra(EXTRA_ADB_TEXT)?.trim()?.take(500).orEmpty()
         }
         if (text.isEmpty()) return
-        dbg("You: $text")
+        dbgContent("You: $text")
 
         // Warn-first ladder: every reply is a potential grace pass or lockout appeal.
         runCatching { com.shiina.mobile.action.ShiinaAccessibilityService.instance?.onUserChat(text) }
@@ -263,7 +273,7 @@ class DebugTalkService : Service() {
 
             lastReply = reply
             runCatching { container.chatHistory.addShiina(reply) }
-            dbg("Shiina ($lastTone): $reply")
+            dbgContent("Shiina ($lastTone): $reply")
             pushTextToOverlay(reply)
             val currentHour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
             val isLate = currentHour >= 23 || currentHour < 5
@@ -392,7 +402,7 @@ class DebugTalkService : Service() {
                     lastGreetingTimestamp = System.currentTimeMillis()
                     lastReply = reply
                     runCatching { container.chatHistory.addShiina(reply) }
-                    dbg("Shiina boot greeting ($lastTone): $reply")
+                    dbgContent("Shiina boot greeting ($lastTone): $reply")
                     pushTextToOverlay(reply)
                     runCatching {
                         container.memoryEpisodeDao.insert(
