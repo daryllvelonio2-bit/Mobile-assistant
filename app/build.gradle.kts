@@ -13,16 +13,26 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 113
-        versionName = "0.109.0"
-        ndk {
-            // sherpa-onnx ships arm64 + arm32; arm64-only keeps the APK lean (JNY-LX1 is arm64).
-            abiFilters += listOf("arm64-v8a")
-        }
+        versionCode = 114
+        versionName = "0.110.0"
     }
 
     buildTypes {
+        debug {
+            ndk {
+                // Debug ships arm64 + x86_64: the fleet Waydroid image is x86_64
+                // (ro.product.cpu.abi=x86_64), so an arm64-only debug APK cannot be installed
+                // and no on-device verification can run. sherpa-onnx-1.13.8.aar ships x86_64
+                // native libs (jni/x86_64/libonnxruntime.so etc.), so this is ABI-complete.
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
+            // Release stays arm64-only: the target handset (JNY-LX1) is arm64 and it keeps
+            // the shipped APK lean. Do NOT add x86_64 here.
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
