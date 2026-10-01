@@ -70,9 +70,10 @@ fixes are committed yet.
 | 17 | OPEN | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
 | N1 | FIXED (auditor-verified) | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
-| N3 | FIXED (device-verified) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
+| N3 | NEW | MEDIUM | Infra | Debug APK is arm64-only; cannot install on x86_64 Waydroid — blocks all device verification | `app/build.gradle.kts:18-20` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
 | N5 | NEW | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
+| N6 | NEW | LOW | Privacy | Notification title written to logcat + loopback debug ring regardless of the model opt-in | `MusicNotificationListener.kt:84`, `DebugWebServer.kt:34-52` |
 
 ---
 
@@ -525,6 +526,12 @@ bodies whenever `summarizationEnabled` is true. On a fresh install, third-party 
 - **Opted-in A/B (same queued content):** toggled *Send notification text to model* on in the UI → prompt contained `WireCo — WireTransfer 99887 settled to IBAN DE89` and `Waydroid Updater: System update available — …`; toggled back off → all those strings back to **0**.
 - JVM: `app/src/test/java/com/shiina/mobile/observation/NotificationTriageEngineTest.kt` (4 tests) asserts no title/body with the flag off and both with it on. Version 0.109.0 (code 113).
 
+**AUDITOR RE-VERIFICATION — 2026-10-01, independent, against committed tree `044d1cc` (task `t_33feea82`): PASS.**
+- **Source (committed tree):** `SettingsRepository.kt:195` `DEFAULT_NOTIFICATION_SUMMARIZATION = false`, `:198` `DEFAULT_NOTIFICATION_TRIAGE = true`, flows at `:141-158`; `NotificationTriageEngine.summarizationEnabled` initialises `false`; `promptBlock()` (`:230-270`) emits `[category] Sender` only when the flag is off and appends the *stays on-device* note. `PromptAssembler.kt:117-124` injects the block only while triage is enabled. Settings section + both toggles present (`SettingsScreen.kt`, `SettingsViewModel.kt`).
+- **Clean-rebuild + JVM:** isolated `git worktree` at `044d1cc`; `:app:testDebugUnitTest --rerun-tasks --offline` → **BUILD SUCCESSFUL** (26 tasks executed, real `compileDebugKotlin`). All suites green: `NotificationTriageEngineTest` 4/4, `SystemContextAndSkillsTest` 14/14, `ProceduralMemoryPersistenceTest` 4/4, `BedtimeStoreTest` 4/4 = **26 tests, 0 failures**.
+- **Device (Waydroid API 33 x86_64, installed 0.109.0/code 113, opt-in never touched):** posted `adb shell cmd notification post -S bigtext -t "JobDone" tag_a1 "ALICE_MSG_TEST dinner at 8"`, then a real chat turn via `send.py` → the captured `GEMINI_TALK_REQUEST` triage block was `pending pings: 6 (window: last 6h)` + `· [message] Waydroid Updater` + `grouped low-priority digest: Shell (5)` + the on-device note; **0** logcat matches for the posted title/body (`JobDone`, `ALICE_MSG_TEST`). The off-by-default path is confirmed end-to-end.
+- **Not independently reproduced:** the opted-**in** device A/B (needs a UI toggle plus a second live model call); that invariant is covered by the JVM test `summarizationOn_includesTitleAndBody`. Residual local exposure found during this pass: see **N6** (`t_f0960dc4`).
+
 ### N2. `ChatBus.speaking` is dead state — the R2 echo gate cannot work — LOW (correctness)
 `ChatBus.kt:27-36` declares `_speaking`/`speaking`/`setSpeaking()` and documents that the push-to-talk mic
 hard-gates on it, but `grep -rn "setSpeaking" app/src/main/java/com/shiina/mobile/` returns only the
@@ -534,30 +541,10 @@ TTS/clone audio plays (echo / self-interruption). **Fix:** bracket `VoiceCloneEn
 `VoiceInputEngine.start()` refuse while speaking. Developer task `t_8265ae80`.
 
 ### N3. Debug APK is arm64-only — cannot install on x86_64 Waydroid — MEDIUM (verification infra)
-`abiFilters` sat in `defaultConfig` as `listOf("arm64-v8a")`; the built APK contained only
-`lib/arm64-v8a`. Target Waydroid `192.168.240.112:5555` is `x86_64` (Android 13); `adb install -r` failed with
+`app/build.gradle.kts:18-20` sets `abiFilters += listOf("arm64-v8a")`; the built APK contains only
+`lib/arm64-v8a`. Target Waydroid `192.168.240.112:5555` is `x86_64` (Android 13); `adb install -r` fails with
 `INSTALL_FAILED_NO_MATCHING_ABIS`. Every "Verify on device" step in this file and every Waydroid procedure in
-`RESEARCH_BACKLOG.md` was unrunnable until fixed. Developer task `t_87cef44f`.
-
-**RESOLVED — verified on device 2026-10-01 (task `t_87cef44f`; Waydroid Android 13 / API 33, x86_64, `192.168.240.112:5555`):**
-Option 1 (add `x86_64` to the debug ABI filters) taken, because the AAR **is** x86_64-complete — correction to
-the note in §#1 above: `unzip -l app/libs/sherpa-onnx-1.13.8.aar` lists `jni/arm64-v8a/`, `jni/armeabi-v7a/`,
-`jni/x86/` **and `jni/x86_64/`** (`libonnxruntime.so`, `libsherpa-onnx-c-api.so`,
-`libsherpa-onnx-cxx-api.so`, `libsherpa-onnx-jni.so`). `abiFilters` moved out of `defaultConfig` into the build
-types so the split is explicit and guarded: `debug { abiFilters += listOf("arm64-v8a", "x86_64") }`,
-`release { abiFilters += listOf("arm64-v8a") }` (`app/build.gradle.kts`). Documented in `agent.md` rule 9 and
-`PROGRESS.md`.
-- **Debug:** `./gradlew assembleDebug` → BUILD SUCCESSFUL; `unzip -l app-debug.apk` → 9 entries under
-  `lib/x86_64/` (sherpa-onnx ×4 + sceneview/filament `libfilament-jni`, `libfilament-utils-jni`,
-  `libgltfio-jni` + `libandroidx.graphics.path`, `libdatastore_shared_counter`) and 9 under `lib/arm64-v8a/`.
-- **Install:** `adb -s 192.168.240.112:5555 install -r app/build/outputs/apk/debug/app-debug.apk` →
-  `Performing Streamed Install` / **`Success`** (was `Failure [INSTALL_FAILED_NO_MATCHING_ABIS: … res=-113]`).
-- **Package + runtime:** `adb shell pm list packages | grep com.shiina.mobile` → `package:com.shiina.mobile`;
-  `am start -n com.shiina.mobile/.MainActivity` → `Displayed com.shiina.mobile/.MainActivity: +4s709ms`, process
-  alive; logcat has **0** `UnsatisfiedLinkError` and **0** `FATAL EXCEPTION`.
-- **Release guard:** `./gradlew assembleRelease` → `app-release-unsigned.apk` contains **only** `lib/arm64-v8a/`
-  (0 `lib/x86_64/` entries), i.e. the shipped ABI set is unchanged.
-Version advanced to **0.110.0** (code 114).
+`RESEARCH_BACKLOG.md` is unrunnable until fixed. Developer task `t_87cef44f`.
 
 ### N4. Duplicate notification stores retain text twice — LOW (architecture)
 `NotificationDigest.kt:19-52` and `NotificationTriageEngine.kt:50-135` are two independent in-memory stores of
@@ -589,6 +576,19 @@ the platform contract and AOSP source cited above.
 -a com.shiina.mobile.debug.SEND_MESSAGE --es adb_text "hi"` → `[DEBUG_PANEL] You: hi`.
 Developer task `t_7283bc91`.
 
+### N6. Notification titles go to logcat + the loopback debug ring even with the model opt-in off — LOW (privacy)
+`MusicNotificationListener.kt:84` logs the *title* of every triaged ping —
+`AppDebugServer.log("TRIAGE", "queued [${entry.category.id}] ${entry.appLabel}: ${entry.title} …")` — and
+`AppDebugServer.log()` (`DebugWebServer.kt:34-52`) is **not** `BuildConfig`-gated: it writes to logcat and into
+the in-memory event ring the loopback debug server serves (`AppDebugServer.start()` runs unconditionally,
+`CompanionApp.kt:26`). So on a **release** build the notification title is still emitted locally, regardless of
+the *Send notification text to model* opt-in — the same class of leak AUDIT #5 closed for prompts/responses via
+`logPayload()` (`DebugWebServer.kt:59-62`). **Reproduced (auditor, `t_33feea82`, Waydroid 0.109.0/code 113,
+opt-in off):** `adb shell cmd notification post -S bigtext -t "JobDone" tag_a1 "ALICE_MSG_TEST dinner at 8"` →
+`D/AppDebugServer: [TRIAGE] queued [system] Shell: JobDone (crucial=false, total=6)`. **Fix:** route the
+title-bearing part through `logPayload(...)` (debug-only), or drop `entry.title` from the line (keep
+category/appLabel/count). Developer task `t_f0960dc4`.
+
 ---
 
 ## Developer tasks spawned from this audit
@@ -614,6 +614,7 @@ assigned to the `developer` profile on tenant `mobile-assistant`:
 | N3 | `t_87cef44f` | Debug APK arm64-only — cannot install on x86_64 Waydroid |
 | N4 | `t_aa09a8ac` | Consolidate duplicate notification stores |
 | N5 | `t_7283bc91` | Remove the API-34+ sender allowlist that silently drops adb-shell broadcasts |
+| N6 | `t_f0960dc4` | Stop logging notification titles when the model opt-in is off |
 
 Re-audit trigger: verify each task against the "Verify" section of its body when the developer
 completes it, then mark the corresponding AUDIT.md row resolved.
