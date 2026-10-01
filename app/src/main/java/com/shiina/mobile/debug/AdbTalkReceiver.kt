@@ -15,8 +15,8 @@ import com.shiina.mobile.CompanionApp
  * `android:permission="android.permission.DUMP"`. Only the adb shell (uid 2000)
  * and system/privileged callers hold DUMP, so AMS refuses to deliver a
  * third-party broadcast before `onReceive` runs, on every supported API level.
- * [isTrustedCaller] adds an in-process allowlist on API 34+, where the framework
- * exposes the real sender uid ([BroadcastReceiver.getSentFromUid]).
+ * That manifest guard is the *only* enforcement — [isTrustedCaller] is a
+ * rejection filter, not a security boundary (AUDIT finding N5).
  *
  * Do NOT gate on `Binder.getCallingUid()` here: during a broadcast callback the
  * binder identity is already unwound, so on-device it returns this app's own uid
@@ -61,18 +61,57 @@ class AdbTalkReceiver : BroadcastReceiver() {
     }
 
     /**
-     * The manifest `android:permission` guard already restricts delivery to callers
-     * holding DUMP (the adb shell / system). This adds an explicit sender allowlist
-     * where the framework can report it (API 34+); below that the guard is the gate.
+     * Thin wrapper over the pure [isTrustedSender] decision so the platform input
+     * (this receiver's own uid, and the framework-reported sender uid) is read here
+     * and the *logic* stays unit-testable off-device.
+     *
+     * [BroadcastReceiver.getSentFromUid] only exists on API 34+ — reading the
+     * `sentFromUid` accessor on an older device throws `NoSuchMethodError` and crashes
+     * the receiver before the predicate can short-circuit (device-verified on API 33).
+     * [callerUidToCheck] therefore takes the getter as a lambda and only invokes it once
+     * the level check has passed.
      */
     private fun isTrustedCaller(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
-        val sender = sentFromUid
-        return sender == Process.SHELL_UID || sender == Process.myUid()
+        val sdk = Build.VERSION.SDK_INT
+        return isTrustedSender(sdk, callerUidToCheck(sdk) { sentFromUid }, Process.myUid())
     }
 
     companion object {
         const val ACTION_SEND = "com.shiina.mobile.debug.SEND_MESSAGE"
         const val ACTION_SET_KEY = "com.shiina.mobile.debug.SET_KEY"
+
+        /**
+         * The manifest `android:permission="android.permission.DUMP"` guard is the real
+         * enforcement: AMS rejects non-DUMP callers before `onReceive` runs. This predicate
+         * is only a belt-and-braces filter and must never reject a caller the manifest
+         * guard admitted.
+         *
+         * On API 34+ [BroadcastReceiver.getSentFromUid] returns [Process.INVALID_UID]
+         * whenever the *sender* did not opt in to identity sharing
+         * (`BroadcastOptions.setShareIdentityEnabled(true)`); the adb shell never opts in
+         * (`ActivityManagerShellCommand` has no such call). A legitimate `am broadcast` —
+         * including `send.py` / `send.py --sync-keys` — therefore reports INVALID_UID.
+         * Treating that as untrusted silently drops every adb broadcast (AUDIT finding N5),
+         * so INVALID_UID must be accepted. Below API 34 the framework exposes no sender uid
+         * at all ([BroadcastReceiver.getSentFromUid] does not exist there), so the manifest
+         * guard alone gates delivery and this predicate is a no-op.
+         */
+        internal fun isTrustedSender(sdkInt: Int, senderUid: Int, selfUid: Int): Boolean {
+            if (sdkInt < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return true
+            return senderUid == Process.INVALID_UID ||
+                senderUid == Process.SHELL_UID ||
+                senderUid == selfUid
+        }
+
+        /**
+         * Reads the framework sender uid only where the accessor exists. On API < 34
+         * [BroadcastReceiver.getSentFromUid] is absent, so [readSentFromUid] must not be
+         * invoked — an eager read throws `NoSuchMethodError` and crashes the receiver
+         * (device-verified on the API 33 Waydroid). Kept pure so the guard is asserted
+         * by unit tests rather than only by the platform.
+         */
+        internal fun callerUidToCheck(sdkInt: Int, readSentFromUid: () -> Int): Int =
+            if (sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) readSentFromUid()
+            else Process.INVALID_UID
     }
 }

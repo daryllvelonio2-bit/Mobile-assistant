@@ -38,6 +38,8 @@ Finding status:
 - **#6 — FIXED (git-verified 2026-10-01, task `t_3690dae3`)** — see finding #6 for evidence.
 - **#7, #8–#17 — OPEN** (no working-tree change addresses them).
 - **N1 — FIXED (auditor-verified 2026-10-01, task `t_61a50116`; re-verified independently by `t_33feea82`)** — see finding N1 for evidence.
+- **N3 — FIXED (auditor-verified 2026-10-01, task `t_87cef44f`, commit `011b725`; verify task `t_7869a7c2`)** — see finding N3 for evidence.
+- **N5 — FIXED (device-verified 2026-10-01, task `t_7283bc91`)** — see finding N5 for evidence.
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`), **N5** (`t_7283bc91`), **N6** (`t_f0960dc4`) — details in the *New findings* section below.
@@ -72,7 +74,7 @@ fixes are committed yet.
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
 | N3 | FIXED (device-verified + independently re-verified `t_7869a7c2`) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
-| N5 | NEW | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
+| N5 | FIXED (device-verified) | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
 | N6 | NEW | LOW | Privacy | Notification title written to logcat + loopback debug ring regardless of the model opt-in | `MusicNotificationListener.kt:84`, `DebugWebServer.kt:34-52` |
 
 ---
@@ -597,7 +599,7 @@ the same notifications (different caps/windows), both fed by `MusicNotificationL
 `triage`, `seedDigest` + `seedTriage`). `NotificationDigest` has no mute/privacy gate. Consolidate so the
 digest derives from the triage engine. Developer task `t_aa09a8ac`.
 
-### N5. API-34+ sender allowlist rejects the legitimate adb/shell path — HIGH (latent, API 34+ only)
+### N5. API-34+ sender allowlist rejects the legitimate adb/shell path — FIXED (device-verified, task `t_7283bc91`)
 `AdbTalkReceiver.kt:68-72` (`isTrustedCaller()`) returns `false` on API 34+ unless `sentFromUid` is
 `Process.SHELL_UID` or `Process.myUid()`. `BroadcastReceiver.getSentFromUid()` returns `Process.INVALID_UID`
 when the receiver "cannot access the identity of the broadcasting app"
@@ -615,10 +617,27 @@ guard (`AndroidManifest.xml:109-115`) already gated delivery, and `Process.myUid
 (on device the app neither requests nor holds DUMP), so the extra check can only produce false negatives.
 **Not reproducible on this test rig** — Waydroid is API 33, so the branch is never taken; the finding rests on
 the platform contract and AOSP source cited above.
-**Fix:** `return sender == Process.INVALID_UID || sender == Process.SHELL_UID || sender == Process.myUid()`
-(or delete `isTrustedCaller()` and rely on the manifest permission guard, as the KDoc already argues).
-**Verify on API 34+:** `adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver
--a com.shiina.mobile.debug.SEND_MESSAGE --es adb_text "hi"` → `[DEBUG_PANEL] You: hi`.
+**Fix:** the sender filter now accepts `Process.INVALID_UID` on API 34+ — the manifest `DUMP` guard is the
+enforcement, and the adb shell never shares identity, so `INVALID_UID` must not be rejected. The decision is
+extracted to a pure, unit-tested `AdbTalkReceiver.isTrustedSender(sdkInt, senderUid, selfUid)`
+(`AdbTalkReceiver.kt:100-113`). Crucially the `sentFromUid` accessor (`BroadcastReceiver.getSentFromUid`,
+API 34+ only) is **not** read eagerly: `callerUidToCheck(sdkInt) { sentFromUid }` (`AdbTalkReceiver.kt:114-124`)
+reads it only once the level check has passed — the first cut of this fix read it as a call argument and
+crashed the receiver on API 33 with `NoSuchMethodError: No virtual method getSentFromUid()I`
+(stack: `AdbTalkReceiver.kt:69` `isTrustedCaller` ← `:37` `onReceive`), so the guard is itself unit-tested.
+**Verified — JVM (`app/src/test/java/com/shiina/mobile/debug/AdbTalkReceiverTrustTest.kt`, 7 tests, 0 failures):**
+INVALID_UID accepted on API 34, shell/self accepted and a foreign uid still rejected when identity *is*
+shared, API 33 is a no-op for every uid, the pre-fix predicate is shown to have dropped INVALID_UID
+(non-vacuous), and `callerUidToCheck(33)` returns INVALID_UID *without invoking* the getter lambda while
+`callerUidToCheck(34)` reads it.
+**Verified — Waydroid (Android 13 / API 33, x86_64, debug APK 0.111.0/115):** the eager-read build was
+reproduced crashing the process on `am broadcast`; after the fix,
+`adb shell am broadcast -n com.shiina.mobile/.debug.AdbTalkReceiver -a com.shiina.mobile.debug.SEND_MESSAGE --es adb_text "hi"`
+→ `[DEBUG_PANEL] You: hi` and the agent pipeline ran to a model reply, and `-a …SET_KEY --es provider __n5verify --es key TESTKEY`
+→ `[SECURITY] API key added via ADB for provider: __n5verify`; **0** `NoSuchMethodError` / **0** `FATAL EXCEPTION`,
+process stayed alive. **Note:** the API-34+ branch itself cannot be exercised on this API 33 target, so its
+logic is covered by the JVM tests above rather than by device execution; the third-party-denial half of the
+manifest guard was already device-verified under finding #1.
 Developer task `t_7283bc91`.
 
 ### N6. Notification titles go to logcat + the loopback debug ring even with the model opt-in off — LOW (privacy)

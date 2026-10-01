@@ -56,7 +56,7 @@ Mobile-assistant/
                 │   ├── onboarding/ # First-run guided setup wizard (Meet Shiina, brain keys, permissions, preferences)
                 │   └── settings/   # Settings ViewModel/UI, MemoryPanel (status, facts viewer, digests, forget all)
                 └── work/           # BaselineWorker (runs NightlyReflection, charger-idle periodic)
-    └── src/test/java/com/shiina/mobile/ # Pure unit tests (SystemContextAndSkillsTest: >10k pure system context, playbooks, parsing, scenario detection)
+    └── src/test/java/com/shiina/mobile/ # Pure JVM unit tests (SystemContextAndSkillsTest: >10k pure system context, playbooks, parsing, scenario detection; debug/AdbTalkReceiverTrustTest: the API-34+ adb-sender filter and its API-33 getter guard)
                                          #   memory/ (ProceduralMemoryPersistenceTest: usage_count/last_used survive a simulated restart)
                                          #   observation/ (NotificationTriageEngineTest: promptBlock leaks no notification title/text unless opted in)
 ```
