@@ -70,7 +70,7 @@ fixes are committed yet.
 | 17 | OPEN | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
 | N1 | FIXED (auditor-verified) | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
-| N3 | NEW | MEDIUM | Infra | Debug APK is arm64-only; cannot install on x86_64 Waydroid — blocks all device verification | `app/build.gradle.kts:18-20` |
+| N3 | FIXED (device-verified) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
 | N5 | NEW | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
 | N6 | NEW | LOW | Privacy | Notification title written to logcat + loopback debug ring regardless of the model opt-in | `MusicNotificationListener.kt:84`, `DebugWebServer.kt:34-52` |
@@ -541,10 +541,30 @@ TTS/clone audio plays (echo / self-interruption). **Fix:** bracket `VoiceCloneEn
 `VoiceInputEngine.start()` refuse while speaking. Developer task `t_8265ae80`.
 
 ### N3. Debug APK is arm64-only — cannot install on x86_64 Waydroid — MEDIUM (verification infra)
-`app/build.gradle.kts:18-20` sets `abiFilters += listOf("arm64-v8a")`; the built APK contains only
-`lib/arm64-v8a`. Target Waydroid `192.168.240.112:5555` is `x86_64` (Android 13); `adb install -r` fails with
+`abiFilters` sat in `defaultConfig` as `listOf("arm64-v8a")`; the built APK contained only
+`lib/arm64-v8a`. Target Waydroid `192.168.240.112:5555` is `x86_64` (Android 13); `adb install -r` failed with
 `INSTALL_FAILED_NO_MATCHING_ABIS`. Every "Verify on device" step in this file and every Waydroid procedure in
-`RESEARCH_BACKLOG.md` is unrunnable until fixed. Developer task `t_87cef44f`.
+`RESEARCH_BACKLOG.md` was unrunnable until fixed. Developer task `t_87cef44f`.
+
+**RESOLVED — verified on device 2026-10-01 (task `t_87cef44f`; Waydroid Android 13 / API 33, x86_64, `192.168.240.112:5555`):**
+Option 1 (add `x86_64` to the debug ABI filters) taken, because the AAR **is** x86_64-complete — correction to
+the note in §#1 above: `unzip -l app/libs/sherpa-onnx-1.13.8.aar` lists `jni/arm64-v8a/`, `jni/armeabi-v7a/`,
+`jni/x86/` **and `jni/x86_64/`** (`libonnxruntime.so`, `libsherpa-onnx-c-api.so`,
+`libsherpa-onnx-cxx-api.so`, `libsherpa-onnx-jni.so`). `abiFilters` moved out of `defaultConfig` into the build
+types so the split is explicit and guarded: `debug { abiFilters += listOf("arm64-v8a", "x86_64") }`,
+`release { abiFilters += listOf("arm64-v8a") }` (`app/build.gradle.kts`). Documented in `agent.md` rule 9 and
+`PROGRESS.md`.
+- **Debug:** `./gradlew assembleDebug` → BUILD SUCCESSFUL; `unzip -l app-debug.apk` → 9 entries under
+  `lib/x86_64/` (sherpa-onnx ×4 + sceneview/filament `libfilament-jni`, `libfilament-utils-jni`,
+  `libgltfio-jni` + `libandroidx.graphics.path`, `libdatastore_shared_counter`) and 9 under `lib/arm64-v8a/`.
+- **Install:** `adb -s 192.168.240.112:5555 install -r app/build/outputs/apk/debug/app-debug.apk` →
+  `Performing Streamed Install` / **`Success`** (was `Failure [INSTALL_FAILED_NO_MATCHING_ABIS: … res=-113]`).
+- **Package + runtime:** `adb shell pm list packages | grep com.shiina.mobile` → `package:com.shiina.mobile`;
+  `am start -n com.shiina.mobile/.MainActivity` → `Displayed com.shiina.mobile/.MainActivity: +4s709ms`, process
+  alive; logcat has **0** `UnsatisfiedLinkError` and **0** `FATAL EXCEPTION`.
+- **Release guard:** `./gradlew assembleRelease` → `app-release-unsigned.apk` contains **only** `lib/arm64-v8a/`
+  (0 `lib/x86_64/` entries), i.e. the shipped ABI set is unchanged.
+Version advanced to **0.110.0** (code 114).
 
 ### N4. Duplicate notification stores retain text twice — LOW (architecture)
 `NotificationDigest.kt:19-52` and `NotificationTriageEngine.kt:50-135` are two independent in-memory stores of
