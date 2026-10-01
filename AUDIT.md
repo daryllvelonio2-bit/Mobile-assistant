@@ -70,7 +70,7 @@ fixes are committed yet.
 | 17 | OPEN | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
 | N1 | FIXED (auditor-verified) | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
-| N3 | FIXED (device-verified) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
+| N3 | FIXED (device-verified + independently re-verified `t_7869a7c2`) | MEDIUM | Infra | Debug APK was arm64-only; cannot install on x86_64 Waydroid — blocked all device verification | `app/build.gradle.kts:12-38` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
 | N5 | NEW | HIGH (API 34+) | Correctness/Security | API-34+ `isTrustedCaller()` allowlist silently drops legitimate adb-shell broadcasts (`getSentFromUid()` → `Process.INVALID_UID`) | `AdbTalkReceiver.kt:68-72`, `AndroidManifest.xml:109-115` |
 | N6 | NEW | LOW | Privacy | Notification title written to logcat + loopback debug ring regardless of the model opt-in | `MusicNotificationListener.kt:84`, `DebugWebServer.kt:34-52` |
@@ -132,8 +132,13 @@ even require it to stay exported: `am broadcast -n <explicit component>` from th
 - **Build:** detached worktree at `fedcc32` (`git worktree add --detach /tmp/wt-fedcc32 fedcc32`) with the single
   edit `abiFilters += listOf("arm64-v8a", "x86_64")` (`app/build.gradle.kts:20`) — needed only because the bundled
   `libs/sherpa-onnx-1.13.8.aar` has no `jni/x86_64` (`unzip -l` → arm64-v8a + armeabi-v7a only), so the stock
-  arm64 APK cannot install on the x86_64 Waydroid target. `./gradlew :app:assembleDebug --offline` → BUILD
+  arm64 APK cannot install on the x86_64 Waydroid target.
+  `./gradlew :app:assembleDebug --offline` → BUILD
   SUCCESSFUL; no app source was modified. Worktree deleted after the run.
+  **[CORRECTED 2026-10-01, task `t_7869a7c2`: the parenthetical above is WRONG. `unzip -l app/libs/sherpa-onnx-1.13.8.aar`
+  (sha256 `633c2432…3bd96`) lists `jni/x86_64/{libonnxruntime,libsherpa-onnx-c-api,libsherpa-onnx-cxx-api,libsherpa-onnx-jni}.so`.
+  The throwaway filter edit was still needed, but because the *stock config* was arm64-only — not because the AAR lacked x86_64.
+  See §N3.]**
 - **Tested class == committed class:** `md5sum` of `AdbTalkReceiver.kt` at `fedcc32` and in the working tree are
   identical (`90c6b19a89ea5a0c2d601119bc9d4855`), and `aapt2 dump xmltree` on the installed APK shows
   `permission="android.permission.DUMP"` + `exported=true` on `com.shiina.mobile.debug.AdbTalkReceiver`.
@@ -566,6 +571,25 @@ types so the split is explicit and guarded: `debug { abiFilters += listOf("arm64
 - **Release guard:** `./gradlew assembleRelease` → `app-release-unsigned.apk` contains **only** `lib/arm64-v8a/`
   (0 `lib/x86_64/` entries), i.e. the shipped ABI set is unchanged.
 Version advanced to **0.110.0** (code 114).
+
+**INDEPENDENT RE-VERIFICATION 2026-10-01 (task `t_7869a7c2`; commit `011b725` alone, read-only) — PASS (5/5 claims):**
+- **Config at the commit:** `git show 011b725 -- app/build.gradle.kts` — `abiFilters` gone from `defaultConfig`;
+  `debug { ndk { abiFilters += listOf("arm64-v8a", "x86_64") } }`, `release { ndk { abiFilters += listOf("arm64-v8a") } }`;
+  versionCode 114 / versionName 0.110.0.
+- **A/B by build, not inference** (detached worktrees with `app/libs` + `local.properties` symlinked, `--offline`):
+  - `011b725` debug → 9 × `lib/x86_64/` + 9 × `lib/arm64-v8a/` (sha256 `fa054394…f3357`);
+  - parent `044d1cc` debug → 9 × `lib/arm64-v8a/`, **0** `lib/x86_64/` (sha256 `68a268cc…dd6d2`) — "was 0 before" confirmed;
+  - `011b725` release → 9 × `lib/arm64-v8a/`, **0** `lib/x86_64/` (sha256 `4d868c91…25d56`).
+- **Device (Waydroid `192.168.240.112:5555`, Android 13/API 33, `ro.product.cpu.abi=x86_64`):**
+  pre-fix APK → `Failure [INSTALL_FAILED_NO_MATCHING_ABIS: … res=-113]`; `011b725` APK → **`Success`**,
+  `versionName=0.110.0 versionCode=114 primaryCpuAbi=x86_64`; device-side `sha256sum` of the pushed APK == local build hash;
+  `am start -W -n com.shiina.mobile/.MainActivity` → `Status: ok`, `Displayed … +2s573ms`,
+  `topResumedActivity=…/MainActivity`, process alive; logcat 0 `UnsatisfiedLinkError`, 0 `FATAL EXCEPTION`, 0 `dlopen failed`.
+- **AAR (§#1 note):** `unzip -l app/libs/sherpa-onnx-1.13.8.aar` (sha256 `633c2432…3bd96`) ships `jni/x86_64/`
+  with 4 `.so` (libonnxruntime, libsherpa-onnx-c-api, libsherpa-onnx-cxx-api, libsherpa-onnx-jni) alongside arm64-v8a /
+  armeabi-v7a / x86 — the developer's correction of that note is right.
+- **Caveat, not a defect:** the APK sets `extractNativeLibs=false`, so the installed `…/lib/x86_64/` directory is
+  legitimately empty; `primaryCpuAbi` is derived from the APK's `lib/` entries, so this is not a missing-library signal.
 
 ### N4. Duplicate notification stores retain text twice — LOW (architecture)
 `NotificationDigest.kt:19-52` and `NotificationTriageEngine.kt:50-135` are two independent in-memory stores of
