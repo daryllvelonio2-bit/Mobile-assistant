@@ -150,8 +150,7 @@ class ProviderRegistry(
         val drifted = summary.entertainmentMinutes > summary.entertainmentBaseline
         val tone = if (drifted) "candid_direct" else "neutral"
         val message = if (drifted) {
-            "Screen time ${summary.entertainmentMinutes}min is over your " +
-                "${summary.entertainmentBaseline.toInt()}min baseline. Time to wind down?"
+            "That's enough screen for one day. Put it down."
         } else ""
         return Decision.fallback(tone, message)
     }
