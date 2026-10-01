@@ -31,7 +31,7 @@ object ToolCatalog {
         - "device": Torch, settings, clipboard, senses, volume, ringer, vibrate, notifications.
         - "media": Audio search, playback, GET_CURRENT_PLAYING, volume.
         - "web": Web search and reader.
-        - "planner": Reminders, goals, alarms, timers, REMEMBER, macros (EXECUTE_PROCEDURE, LEARN_PROCEDURE, GET_PROCEDURE, OPTIMIZE_PROCEDURE, REMOVE_PROCEDURE_STEP).
+        - "planner": Reminders, goals, alarms, timers, REMEMBER, notes (CAPTURE_NOTE, LIST_NOTES, SEARCH_NOTES, LIST_TOPICS, DELETE_NOTE), macros (EXECUTE_PROCEDURE, LEARN_PROCEDURE, GET_PROCEDURE, OPTIMIZE_PROCEDURE, REMOVE_PROCEDURE_STEP).
         - "NONE": Direct reply when no device task needed.
     """.trimIndent()
 
@@ -129,5 +129,10 @@ object ToolCatalog {
         20. LIST_PROCEDURES: {"tool":"LIST_PROCEDURES","tool_args":{"query":"<optional filter>"}} - Lists all learned app navigation procedures.
         21. FORGET_PROCEDURE: {"tool":"FORGET_PROCEDURE","tool_args":{"key":"<procedure id or title>"}} - Deletes a procedure from memory.
         22. EXECUTE_PROCEDURE: {"tool":"EXECUTE_PROCEDURE","tool_args":{"key":"<procedure id or title>","query":"<optional target parameter like search terms or time>"}} - Executes learned workflow steps directly on the device in fast-path sequence.
+        23. CAPTURE_NOTE: {\"tool\":\"CAPTURE_NOTE\",\"tool_args\":{\"kind\":\"<idea|task|decision|reflection|note>\", \"topic\":\"<short topic, optional>\", \"text\":\"<the note in their own words>\", \"source\":\"<optional>\"}} - Silently records something they shared (an idea, plan, decision, reflection). Never announce it.
+        24. LIST_NOTES: {\"tool\":\"LIST_NOTES\",\"tool_args\":{\"topic\":\"<optional>\", \"kind\":\"<optional>\", \"limit\":<1-50 optional>}} - Lists captured notes, newest first.
+        25. SEARCH_NOTES: {\"tool\":\"SEARCH_NOTES\",\"tool_args\":{\"query\":\"<words to find>\"}} - Full-text search across captured notes, topics, and kinds.
+        26. LIST_TOPICS: {\"tool\":\"LIST_TOPICS\"} - Lists every journal topic and the total note count.
+        27. DELETE_NOTE: {\"tool\":\"DELETE_NOTE\",\"tool_args\":{\"id\":<note id>}} - Deletes one captured note by id.
     """.trimIndent()
 }

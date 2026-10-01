@@ -14,6 +14,7 @@ import com.shiina.mobile.data.db.MIGRATION_7_8
 import com.shiina.mobile.data.db.MIGRATION_8_9
 import com.shiina.mobile.data.db.MIGRATION_9_10
 import com.shiina.mobile.data.db.MIGRATION_10_11
+import com.shiina.mobile.data.db.MIGRATION_11_12
 import com.shiina.mobile.data.security.KeyStoreKeys
 import com.shiina.mobile.data.settings.SettingsRepository
 import com.shiina.mobile.action.ActionExecutor
@@ -47,6 +48,7 @@ class AppContainer(context: Context) {
                 MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                 MIGRATION_9_10,
                 MIGRATION_10_11,
+                MIGRATION_11_12,
             )
             .build()
     }
@@ -82,6 +84,9 @@ class AppContainer(context: Context) {
     val chatTurnDao by lazy { database.chatTurnDao() }
 
     val memorySummaryDao by lazy { database.memorySummaryDao() }
+
+    /** Phase 3: captured journal notes (knowledge_notes). */
+    val knowledgeNoteDao by lazy { database.knowledgeNoteDao() }
 
     val moodEngine: com.shiina.mobile.character.MoodEngine by lazy {
         com.shiina.mobile.character.MoodEngine(database.moodStateDao())

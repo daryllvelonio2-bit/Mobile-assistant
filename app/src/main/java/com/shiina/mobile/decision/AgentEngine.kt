@@ -1,7 +1,6 @@
 package com.shiina.mobile.decision
 
 import android.content.Context
-import android.util.Base64
 import com.shiina.mobile.debug.AppDebugServer
 import com.shiina.mobile.debug.ChatBus
 import com.shiina.mobile.di.AppContainer
@@ -13,6 +12,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 /**
  * Core agentic execution engine.
@@ -28,6 +28,12 @@ class AgentEngine(
 
     companion object {
         const val MAX_AGENT_STEPS = 25
+
+        /** Prepended to the first turn when the user's message is a push-to-talk clip (R2). */
+        private const val VOICE_INPUT_DIRECTIVE =
+            "# Voice Input\nThe user's current message is an attached audio clip (16 kHz mono WAV). " +
+                "Transcribe it internally and treat the spoken words as their request. " +
+                "Never claim you cannot hear audio.\n\n"
     }
 
 data class AgentRunResult(
@@ -51,8 +57,9 @@ data class AgentRunResult(
         isSystemTrigger: Boolean = false,
         hoursInactive: Double = 0.0,
         onProgress: (String) -> Unit = {},
+        audioFile: File? = null,
     ): String = withContext(Dispatchers.IO) {
-        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress).message
+        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress, audioFile).message
     }
 
     /**
@@ -66,8 +73,9 @@ data class AgentRunResult(
         isSystemTrigger: Boolean = false,
         hoursInactive: Double = 0.0,
         onProgress: (String) -> Unit = {},
+        audioFile: File? = null,
     ): AgentRunResult = withContext(Dispatchers.IO) {
-        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress)
+        runAgentLoopInternal(userText, initialTone, initialMode, isSystemTrigger, hoursInactive, onProgress, audioFile)
     }
 
     suspend fun rawQuery(prompt: String, tone: String = "calm", attachShot: Boolean = false): String {
@@ -81,6 +89,7 @@ data class AgentRunResult(
         isSystemTrigger: Boolean = false,
         hoursInactive: Double = 0.0,
         onProgress: (String) -> Unit = {},
+        audioFile: File? = null,
     ): AgentRunResult = withContext(Dispatchers.IO) {
         ChatBus.beginRun()
         var currentTone = initialTone
@@ -120,7 +129,10 @@ data class AgentRunResult(
                 lastInteractionMillis = previousInteractionTime,
             )
 
-            var currentPrompt = basePromptWithTools
+            var currentPrompt = if (audioFile != null) VOICE_INPUT_DIRECTIVE + basePromptWithTools else basePromptWithTools
+            // The clip is only attached to the first request; the model's own transcription
+            // and reasoning then carry forward via the execution-state prompt.
+            var pendingAudio: File? = audioFile?.takeIf { it.isFile }
 
             while (calls < MAX_AGENT_STEPS) {
                 // Check if user requested to stop execution
@@ -129,7 +141,9 @@ data class AgentRunResult(
                     return@withContext AgentRunResult("Action stopped.", -1, currentTone)
                 }
 
-                val raw = postText(currentPrompt, attachShot = shouldAttachShot, structuredSchema = true)
+                val audioForTurn = pendingAudio
+                pendingAudio = null
+                val raw = postText(currentPrompt, attachShot = shouldAttachShot, structuredSchema = true, audioFile = audioForTurn)
                 shouldAttachShot = false
                 val step = AgentStepParser.parse(raw, ToolDispatcher.KNOWN_TOOLS)
 
@@ -330,44 +344,34 @@ data class AgentRunResult(
     /**
      * Single Gemini request with optional vision attach and JSON schema enforcement.
      */
-    private suspend fun postText(prompt: String, attachShot: Boolean, structuredSchema: Boolean = false): String {
+    private suspend fun postText(prompt: String, attachShot: Boolean, structuredSchema: Boolean = false, audioFile: File? = null): String {
         val keyPool = container.geminiKeyPool
         val totalKeys = container.keyStore.getKeys("gemini").size.coerceAtLeast(1)
         // Mobile data drops are common; give a single key at least 3 tries before giving up.
         val maxAttempts = (totalKeys * 2).coerceIn(3, 6)
 
-        val parts = JSONArray().put(
-            JSONObject().put("text", prompt),
-        )
-        var imageBytesCount = 0
-        if (attachShot) {
-            val shot = runCatching { container.screenshotTaker.latestCapture(maxAgeMs = 60_000L) }.getOrNull()
-            if (shot != null) {
-                val bytes = runCatching { shot.readBytes() }.getOrNull()
-                if (bytes != null) {
-                    imageBytesCount = bytes.size
-                    parts.put(
-                        JSONObject().put(
-                            "inline_data",
-                            JSONObject()
-                                .put("mime_type", "image/jpeg")
-                                .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP)),
-                        ),
-                    )
-                }
-            }
-        }
+        val shot = if (attachShot) {
+            runCatching { container.screenshotTaker.latestCapture(maxAgeMs = 60_000L) }.getOrNull()
+        } else null
+        val parts = GeminiContentBuilder.buildParts(prompt, shot, audioFile)
+        val imageBytesCount = shot?.let { runCatching { it.length().toInt() }.getOrDefault(0) } ?: 0
+        val audioBytesCount = audioFile?.let { runCatching { it.length().toInt() }.getOrDefault(0) } ?: 0
 
         val textTokensEst = prompt.length / 4
         val imageTokensEst = if (imageBytesCount > 0) 258 else 0
-        val totalTokensEst = textTokensEst + imageTokensEst
+        // Gemini audio input is tokenized at ~32 tokens/second of audio.
+        val audioSecondsEst = if (audioBytesCount > 0) audioBytesCount / 32 / 1000.0 else 0.0
+        val audioTokensEst = (audioSecondsEst * 32).toInt()
+        val totalTokensEst = textTokensEst + imageTokensEst + audioTokensEst
         AppDebugServer.log(
             "TOKEN_AUDIT",
-            "Turn request payload: ~$totalTokensEst tokens (text: ~$textTokensEst, image: ${if (imageBytesCount > 0) "~258 tokens (${imageBytesCount / 1024}KB)" else "0 tokens"}), promptLength=${prompt.length}",
+            "Turn request payload: ~$totalTokensEst tokens (text: ~$textTokensEst, image: ${if (imageBytesCount > 0) "~258 tokens (${imageBytesCount / 1024}KB)" else "0 tokens"}, audio: ${if (audioBytesCount > 0) "~$audioTokensEst tokens (${"%.1f".format(audioSecondsEst)}s)" else "0 tokens"}), promptLength=${prompt.length}",
         )
         AppDebugServer.logPayload(
             "GEMINI_TALK_REQUEST",
-            "Talk prompt:\n$prompt" + if (imageBytesCount > 0) " [screenshot attached: ${imageBytesCount / 1024}KB]" else "",
+            "Talk prompt:\n$prompt" +
+                if (imageBytesCount > 0) " [screenshot attached: ${imageBytesCount / 1024}KB]" else "" +
+                if (audioBytesCount > 0) " [audio attached: ${audioBytesCount / 1024}KB audio/wav]" else "",
         )
 
         val requestBody = JSONObject()

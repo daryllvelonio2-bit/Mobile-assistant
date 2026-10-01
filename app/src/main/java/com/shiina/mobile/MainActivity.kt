@@ -73,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import com.shiina.mobile.character.CharacterOverlayService
 import com.shiina.mobile.observation.CaptureConsent
 import com.shiina.mobile.observation.ObservationService
 import com.shiina.mobile.theme.CompanionTheme
@@ -96,6 +97,27 @@ class MainActivity : ComponentActivity() {
     companion object {
         /** Set by the overlay bubble tap (same process) to open the Chat tab. */
         @Volatile var pendingTab: Int? = null
+
+        /** Set by the Quick Settings tile: open Chat and raise the overlay bubble. */
+        const val EXTRA_SUMMON = "com.shiina.mobile.extra.TILE_SUMMON"
+    }
+
+    /**
+     * R5: the tile hands off here because an Activity is foreground at this point, so it (not the
+     * background TileService) is allowed to start the overlay foreground service.
+     */
+    private fun handleTileSummon(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_SUMMON, false) != true) return
+        pendingTab = 1
+        runCatching {
+            startForegroundService(
+                Intent(this, CharacterOverlayService::class.java).apply {
+                    action = CharacterOverlayService.ACTION_SHOW
+                },
+            )
+        }.onFailure {
+            com.shiina.mobile.debug.AppDebugServer.log("ERROR", "TILE summon overlay start failed: ${it.message}")
+        }
     }
 
     private fun applyPendingTab() {
@@ -126,6 +148,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        handleTileSummon(intent)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             notificationsPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -136,7 +159,7 @@ class MainActivity : ComponentActivity() {
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    SettingsViewModel(container.settingsRepository, container.keyStore, container.memoryStore, container.memoryContext, container.learnedMemoryManager, container.proceduralMemoryStore) as T
+                    SettingsViewModel(container.settingsRepository, container.keyStore, container.memoryStore, container.memoryContext, container.learnedMemoryManager, container.proceduralMemoryStore, container.knowledgeNoteDao) as T
             },
         )[SettingsViewModel::class.java]
         val characterVm = ViewModelProvider(
@@ -184,7 +207,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Overlay bubble tap: bring the existing activity forward on the Chat tab.
+        // Overlay bubble tap or QS tile: bring the activity forward on the Chat tab.
+        handleTileSummon(intent)
         applyPendingTab()
     }
 

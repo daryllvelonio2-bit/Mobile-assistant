@@ -19,8 +19,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReminderEntry::class,
         MoodState::class,
         TriggerEntry::class,
+        KnowledgeNote::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -36,6 +37,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun reminderDao(): ReminderDao
     abstract fun moodStateDao(): MoodStateDao
     abstract fun triggerDao(): TriggerDao
+    abstract fun knowledgeNoteDao(): KnowledgeNoteDao
 }
 
 /** v2: episodic memory — one row per decision round. Never destructive. */
@@ -179,5 +181,23 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
                 "`updatedMillis` INTEGER NOT NULL, " +
                 "PRIMARY KEY(`id`))",
         )
+    }
+}
+
+/** v12: Phase 3 — captured journal notes (knowledge_notes), never destructive. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `knowledge_notes` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`kind` TEXT NOT NULL, " +
+                "`topic` TEXT NOT NULL, " +
+                "`text` TEXT NOT NULL, " +
+                "`source` TEXT NOT NULL, " +
+                "`createdMillis` INTEGER NOT NULL)",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_notes_createdMillis` ON `knowledge_notes` (`createdMillis`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_notes_kind` ON `knowledge_notes` (`kind`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_notes_topic` ON `knowledge_notes` (`topic`)")
     }
 }

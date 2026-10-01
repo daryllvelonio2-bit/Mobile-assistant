@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import com.shiina.mobile.character.CharacterMode
 import com.shiina.mobile.character.CharacterOverlayService
+import com.shiina.mobile.data.db.KnowledgeNote
 import com.shiina.mobile.di.AppContainer
 import kotlinx.coroutines.delay
 import org.json.JSONArray
@@ -36,6 +37,8 @@ object ToolDispatcher {
         "SET_REMINDER", "LIST_REMINDERS", "CANCEL_REMINDER",
         "SET_TRIGGER", "LIST_TRIGGERS", "CANCEL_TRIGGER",
         "SET_ALARM", "SET_TIMER",
+        // Phase 3 — structured journal / knowledge capture
+        "CAPTURE_NOTE", "LIST_NOTES", "SEARCH_NOTES", "LIST_TOPICS", "DELETE_NOTE",
         // Procedural App Navigation Memory & Macro Self-Optimization
         "GET_PROCEDURE", "LEARN_PROCEDURE", "REMOVE_PROCEDURE_STEP",
         "UPDATE_PROCEDURE_STEP", "OPTIMIZE_PROCEDURE", "LIST_PROCEDURES", "FORGET_PROCEDURE",
@@ -72,6 +75,10 @@ object ToolDispatcher {
                     .put("mode", JSONObject().put("type", "STRING"))
                     .put("key", JSONObject().put("type", "STRING"))
                     .put("value", JSONObject().put("type", "STRING"))
+                    .put("kind", JSONObject().put("type", "STRING"))
+                    .put("topic", JSONObject().put("type", "STRING"))
+                    .put("source", JSONObject().put("type", "STRING"))
+                    .put("id", JSONObject().put("type", "INTEGER"))
                     .put("element_id", JSONObject().put("type", "INTEGER"))
                     .put("x", JSONObject().put("type", "NUMBER"))
                     .put("y", JSONObject().put("type", "NUMBER"))
@@ -474,6 +481,83 @@ object ToolDispatcher {
                         ToolResult("Procedure '$k' not found in procedural memory.", shouldAttachScreenshot = false, waitMs = 300L)
                     } else {
                         executeProcedureSteps(entry, dynamicArg, container)
+                    }
+                }
+                // ---- Phase 3: structured journal / knowledge capture ----
+                "CAPTURE_NOTE" -> {
+                    val body = step.text.ifBlank { step.value }.ifBlank { step.query }.trim()
+                    if (body.isBlank()) {
+                        ToolResult("[ERROR] CAPTURE_NOTE requires 'text'.", shouldAttachScreenshot = false, waitMs = 200L)
+                    } else {
+                        val kind = KnowledgeNote.normalizeKind(step.kind.ifBlank { step.action })
+                        val topic = KnowledgeNote.normalizeTopic(step.topic.ifBlank { step.title }, body)
+                        val source = step.source.ifBlank { "chat" }
+                        val id = container.knowledgeNoteDao.insert(
+                            KnowledgeNote(
+                                kind = kind,
+                                topic = topic,
+                                text = body.take(2000),
+                                source = source,
+                                createdMillis = System.currentTimeMillis(),
+                            ),
+                        )
+                        // Silent by design: the etiquette block tells her never to announce a save.
+                        val total = container.knowledgeNoteDao.count()
+                        // Structural evidence only — the note body itself stays out of logcat.
+                        com.shiina.mobile.debug.AppDebugServer.log(
+                            "JOURNAL",
+                            "Captured note #$id [kind=$kind topic=$topic source=$source]; journal total=$total",
+                        )
+                        ToolResult(
+                            "Note logged silently (#$id, $kind · $topic). Keep the conversation going — do not tell them you saved anything.",
+                            shouldAttachScreenshot = false,
+                            waitMs = 200L,
+                        )
+                    }
+                }
+                "LIST_NOTES" -> {
+                    val limit = step.level.takeIf { it > 0 }?.coerceIn(1, 50) ?: 20
+                    val topic = step.topic.ifBlank { step.query }.trim()
+                    val kind = step.kind.trim().lowercase().takeIf { it in KnowledgeNote.KINDS }
+                    val notes = when {
+                        topic.isNotBlank() -> container.knowledgeNoteDao.byTopic(topic, limit)
+                        kind != null -> container.knowledgeNoteDao.byKind(kind, limit)
+                        else -> container.knowledgeNoteDao.recent(limit)
+                    }
+                    ToolResult(KnowledgeNote.renderNotes(notes), shouldAttachScreenshot = false, waitMs = 300L)
+                }
+                "SEARCH_NOTES" -> {
+                    val q = step.query.ifBlank { step.text }.trim()
+                    val receipt = if (q.isBlank()) {
+                        "SEARCH_NOTES requires 'query'."
+                    } else {
+                        KnowledgeNote.renderNotes(container.knowledgeNoteDao.search(q, 30))
+                    }
+                    ToolResult(receipt, shouldAttachScreenshot = false, waitMs = 300L)
+                }
+                "LIST_TOPICS" -> {
+                    val topics = container.knowledgeNoteDao.topics()
+                    val count = container.knowledgeNoteDao.count()
+                    val receipt = if (topics.isEmpty()) {
+                        "No journal topics yet ($count notes)."
+                    } else {
+                        "Topics ($count notes): ${topics.joinToString(", ")}"
+                    }
+                    ToolResult(receipt, shouldAttachScreenshot = false, waitMs = 300L)
+                }
+                "DELETE_NOTE" -> {
+                    val noteId = if (step.id > 0) step.id else step.level.toLong()
+                    if (noteId <= 0) {
+                        ToolResult("DELETE_NOTE requires a numeric 'id'.", shouldAttachScreenshot = false, waitMs = 200L)
+                    } else {
+                        container.knowledgeNoteDao.delete(noteId)
+                        val remaining = container.knowledgeNoteDao.count()
+                        com.shiina.mobile.debug.AppDebugServer.log("JOURNAL", "Deleted note #$noteId; journal total=$remaining")
+                        ToolResult(
+                            "Deleted note #$noteId. $remaining notes remain.",
+                            shouldAttachScreenshot = false,
+                            waitMs = 200L,
+                        )
                     }
                 }
                 else -> ToolResult("Unknown tool '${step.tool}'", shouldAttachScreenshot = false, waitMs = 200L)

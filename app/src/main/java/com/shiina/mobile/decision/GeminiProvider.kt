@@ -1,7 +1,6 @@
 package com.shiina.mobile.decision
 
 import android.content.Context
-import android.util.Base64
 import com.shiina.mobile.data.db.GoalDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,6 +39,17 @@ class GeminiProvider(
         summary: DecisionSummary,
         memoryContext: String,
         senses: String,
+    ): Decision = generate(summary, memoryContext, senses, audio = null)
+
+    /**
+     * Same decision round, but with an optional push-to-talk audio clip (R2) attached
+     * alongside the text part as `inline_data` `audio/wav`.
+     */
+    suspend fun generate(
+        summary: DecisionSummary,
+        memoryContext: String,
+        senses: String,
+        audio: File?,
     ): Decision = withContext(Dispatchers.IO) {
         val key = keys.next() ?: run {
             com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "No Gemini API keys found in KeyStore")
@@ -49,29 +59,23 @@ class GeminiProvider(
         com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Calling Gemini API (model=$activeModel, prompt=${ShiinaPrompts.PROMPT_VERSION})...")
         try {
             val promptText = prompt(summary, memoryContext, senses)
-            val parts = JSONArray().put(JSONObject().put("text", promptText))
 
-            // Attach latest screenshot if captured within the last 30 minutes
+            // Attach the latest screenshot (fresh capture only) and/or the push-to-talk clip.
             val latestCap = getLatestRecentScreenshot()
             val screenshotAttached = latestCap != null
+            val parts = GeminiContentBuilder.buildParts(promptText, latestCap, audio)
             if (latestCap != null) {
-                val bytes = latestCap.readBytes()
-                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                parts.put(
-                    JSONObject().put(
-                        "inline_data",
-                        JSONObject()
-                            .put("mime_type", "image/jpeg")
-                            .put("data", b64)
-                    )
-                )
                 com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Attached screenshot: ${latestCap.name}")
+            }
+            if (audio != null) {
+                com.shiina.mobile.debug.AppDebugServer.log("GEMINI", "Attached audio clip: ${audio.name} (${audio.length() / 1024}KB)")
             }
 
             com.shiina.mobile.debug.AppDebugServer.logPayload(
                 "GEMINI_REQUEST",
                 "Prompt (senses, baseline, memory, rules):\n$promptText" +
-                    if (screenshotAttached) "\n[Attached screenshot: ${latestCap?.name}]" else ""
+                    if (screenshotAttached) "\n[Attached screenshot: ${latestCap?.name}]" else "" +
+                    if (audio != null) "\n[Attached audio: ${audio.name}]" else ""
             )
 
             val body = JSONObject()
@@ -333,4 +337,35 @@ appendLine("DENIABILITY: when you have interfered, your first explanation is a m
         } else {
             "You're on track. Carry on."
         }
+}
+
+/**
+ * Pure content-part builder shared by the decision provider and the live agent talk path (R2).
+ *
+ * Places the text part first and then optional `inline_data` media parts. Uses
+ * `java.util.Base64` (available API 26+) rather than `android.util.Base64` so the builder
+ * is exercisable from a plain JVM unit test.
+ */
+object GeminiContentBuilder {
+    const val MIME_WAV = "audio/wav"
+    const val MIME_JPEG = "image/jpeg"
+
+    fun buildParts(promptText: String, screenshot: File? = null, audio: File? = null): JSONArray {
+        val parts = JSONArray().put(JSONObject().put("text", promptText))
+        inlinePart(screenshot, MIME_JPEG)?.let { parts.put(it) }
+        inlinePart(audio, MIME_WAV)?.let { parts.put(it) }
+        return parts
+    }
+
+    private fun inlinePart(file: File?, mime: String): JSONObject? {
+        if (file == null || !file.isFile) return null
+        val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+        if (bytes.isEmpty()) return null
+        return JSONObject().put(
+            "inline_data",
+            JSONObject()
+                .put("mime_type", mime)
+                .put("data", java.util.Base64.getEncoder().encodeToString(bytes)),
+        )
+    }
 }

@@ -44,6 +44,12 @@ fun hasNotificationAccess(context: Context): Boolean {
     return flat.contains(context.packageName)
 }
 
+/** Phase 1: calendar read access for contextual briefings. */
+fun hasCalendarAccess(context: Context): Boolean =
+    androidx.core.content.ContextCompat.checkSelfPermission(
+        context, android.Manifest.permission.READ_CALENDAR,
+    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
 fun openNotificationListenerSettings(context: Context) {
     context.startActivity(
         Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

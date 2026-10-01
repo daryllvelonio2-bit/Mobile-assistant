@@ -2,6 +2,8 @@ package com.shiina.mobile.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.shiina.mobile.data.db.KnowledgeNote
+import com.shiina.mobile.data.db.KnowledgeNoteDao
 import com.shiina.mobile.data.db.MemoryFact
 import com.shiina.mobile.data.db.MemorySummary
 import com.shiina.mobile.data.security.KeyStoreKeys
@@ -23,6 +25,7 @@ class SettingsViewModel(
     private val memoryContext: MemoryContext? = null,
     private val learnedMemoryManager: LearnedMemoryManager? = null,
     private val proceduralMemoryStore: ProceduralMemoryStore? = null,
+    private val knowledgeNoteDao: KnowledgeNoteDao? = null,
 ) : ViewModel() {
 
     val screenshotEnabled = settings.screenshotEnabled
@@ -81,6 +84,10 @@ class SettingsViewModel(
 
     private val _digests = MutableStateFlow<List<MemorySummary>>(emptyList())
     val digests: StateFlow<List<MemorySummary>> = _digests
+
+    /** Phase 3 Journal — captured notes, newest first. */
+    private val _notes = MutableStateFlow<List<KnowledgeNote>>(emptyList())
+    val notes: StateFlow<List<KnowledgeNote>> = _notes
 
     /** Exact block she carries into prompts (MemoryContext.build, 2000 chars max). */
     private val _fullContext = MutableStateFlow("Total context not loaded yet.")
@@ -166,6 +173,22 @@ class SettingsViewModel(
             _memoryStatus.value =
                 runCatching { memoryStore.statusLine() }.getOrDefault("Memory unavailable.")
             _digests.value = runCatching { memoryStore.recentDigests() }.getOrDefault(emptyList())
+            loadNotes()
+            refreshContext()
+        }
+    }
+
+    /** Phase 3: load the Journal list. */
+    fun loadNotes() {
+        viewModelScope.launch {
+            _notes.value = runCatching { knowledgeNoteDao?.all() }.getOrNull().orEmpty()
+        }
+    }
+
+    fun deleteNote(id: Long) {
+        viewModelScope.launch {
+            runCatching { knowledgeNoteDao?.delete(id) }
+            loadNotes()
             refreshContext()
         }
     }
@@ -197,6 +220,7 @@ class SettingsViewModel(
             // File-backed memories survive the DB wipe — clear them too so she truly forgets.
             runCatching { learnedMemoryManager?.clear() }
             runCatching { proceduralMemoryStore?.clearUserProcedures() }
+            runCatching { knowledgeNoteDao?.deleteAll() }
             loadFacts()
         }
     }

@@ -37,6 +37,11 @@ data class AgentStep(
     val direction: String = "",
     val isLongPress: Boolean = false,
     val message: String = "",
+    // Phase 3 journal capture/query fields
+    val kind: String = "",
+    val topic: String = "",
+    val source: String = "",
+    val id: Long = -1L,
 )
 
 object AgentStepParser {
@@ -185,6 +190,10 @@ object AgentStepParser {
                 direction = args.optString("direction", "").trim().lowercase(),
                 isLongPress = isLongPress,
                 message = message.trim(),
+                kind = args.optString("kind", "").trim(),
+                topic = args.optString("topic", "").trim(),
+                source = args.optString("source", "").trim(),
+                id = args.optLong("id", args.optLong("note_id", -1L)),
             )
         }.getOrNull()
     }

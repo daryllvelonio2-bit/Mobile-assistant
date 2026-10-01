@@ -16,7 +16,15 @@ import com.shiina.mobile.decision.DecisionSummary
 import com.shiina.mobile.decision.MemoryContext
 import com.shiina.mobile.data.db.MemoryFact
 import com.shiina.mobile.di.AppContainer
+import com.shiina.mobile.observation.BriefingContextBuilder
+import com.shiina.mobile.observation.BriefingInputs
+import com.shiina.mobile.observation.CalendarReader
+import com.shiina.mobile.observation.NotificationDigest
+import com.shiina.mobile.observation.TimingGate
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,20 +36,25 @@ import org.json.JSONObject
 /**
  * P1 Heartbeat Loop (action/ProactiveLoop.kt):
  * Inexact jittered 45-90 min AlarmManager tick plus BOOT_COMPLETED restore.
- * Each tick evaluates hard gates before running the decide+render pipeline:
- *  1. User time windows plus learned nudge hour (MemoryContext), late-night
- *     guardian (23-5, screen on) and binge-scroll guardian (>=120min
- *     entertainment + screen on + 8h nag cooldown).
- *  2. Screen must be on (DeviceSenses snapshot screen field == "on").
- *  3. Battery temp under ~40C via BatteryManager EXTRA_TEMPERATURE.
- *  4. Skip on low battery (DeviceSenses low_battery or <=15%).
- *  5. Respect presenceOnly kill switch (SettingsRepository.presenceOnly).
- *  6. Dismissal cooldown via MemoryOutcomes (cooldownActive()).
- *  7. Max 6 overlay shows per hour (MemoryEpisodeDao episodesSince).
+ *
+ * Phase 1 (Smart Contextual Briefings): each tick first assembles a structured
+ * briefing snapshot (period, battery, upcoming calendar events, unread
+ * notifications, foreground app, music) and runs it through a smart timing gate
+ * so she checks in only at relevant moments — morning pickup, post-work
+ * transition, low-battery warning, late-night / binge guardians, learned hours.
+ *
+ * Hard gates (any failure skips the tick and reschedules):
+ *  1. Screen must be on (DeviceSenses snapshot screen field == "on").
+ *  2. Battery temp under ~40C via BatteryManager EXTRA_TEMPERATURE.
+ *  3. Critical battery (<=10%) is never woken for an LLM turn.
+ *  4. Respect presenceOnly kill switch (SettingsRepository.presenceOnly).
+ *  5. Dismissal cooldown via MemoryOutcomes (cooldownActive()).
+ *  6. Max 6 overlay shows per hour (MemoryEpisodeDao episodesSince).
+ *  7. Smart timing gate (BriefingContextBuilder.resolveTimingGate).
  *
  * Each passing tick executes the same pipeline as AlarmReceiver.runEveningDecision
  * with source="loop", showing overlay ONLY IF decision.interrupt is true.
- * Next tick is always rescheduled (45-90 min jitter) regardless of gate outcomes.
+ * Next tick is always rescheduled regardless of gate outcomes.
  */
 class ProactiveLoop : BroadcastReceiver() {
 
@@ -89,6 +102,11 @@ class ProactiveLoop : BroadcastReceiver() {
         // recall (cutoff 0.3) never surfaces it in her context.
         const val BINGE_NAG_COOLDOWN_MS = 8 * ONE_HOUR_MS
         const val KEY_LAST_BINGE_NAG = "sys_last_binge_nag"
+        // Battery at/below this is never woken for an LLM turn (saving the last electrons).
+        const val CRITICAL_BATTERY_SKIP_PERCENT = 10
+        // Once-a-day smart-briefing markers (0.2 confidence so recall never surfaces them).
+        const val KEY_LAST_MORNING_BRIEF = "sys_last_morning_brief"
+        const val KEY_LAST_POSTWORK_BRIEF = "sys_last_postwork_brief"
 
         /** Public entry to restore or start the loop (e.g. on boot or app startup). */
         fun restorePending(context: Context) {
@@ -151,123 +169,82 @@ class ProactiveLoop : BroadcastReceiver() {
             }
         }
 
-        /** Main execution of one heartbeat tick: gates -> pipeline -> reschedule. */
+        /** Main execution of one heartbeat tick: briefing -> gates -> pipeline -> reschedule. */
         suspend fun runTick(context: Context) {
             try {
-                AppDebugServer.log("LOOP", "Proactive heartbeat tick fired, evaluating gates...")
-                if (!checkAllGates(context)) {
-                    AppDebugServer.log("LOOP", "Proactive tick skipped by hard gates")
+                AppDebugServer.log("LOOP", "Proactive heartbeat tick fired, assembling briefing...")
+                val inputs = collectBriefingInputs(context)
+                val gate = evaluateGates(context, inputs)
+                if (!gate.allowed) {
+                    AppDebugServer.log("LOOP", "Proactive tick skipped by gates (${gate.label}: ${gate.reason})")
                     scheduleNextTick(context)
                     return
                 }
-                AppDebugServer.log("LOOP", "All hard gates passed; running decision pipeline...")
-                runDecisionPipeline(context)
+                AppDebugServer.log("LOOP", "All gates passed (${gate.label}); running decision pipeline...")
+                runDecisionPipeline(context, inputs, gate)
             } catch (e: Exception) {
                 AppDebugServer.log("ERROR", "Proactive tick execution error: ${e.message}")
                 scheduleNextTick(context)
             }
         }
 
-        /** Evaluates all 7 hard gates before decision pipeline runs. */
-        suspend fun checkAllGates(context: Context): Boolean {
+        /** Collects the structured briefing snapshot from local device state. */
+        suspend fun collectBriefingInputs(context: Context): BriefingInputs {
             val c = container(context)
-            val snapshotStr = runCatching { c.deviceSenses.snapshot() }.getOrDefault("{}")
-            val sensesJson = runCatching { JSONObject(snapshotStr) }.getOrNull()
-
-            if (!checkScreenGate(sensesJson)) return false
-            if (!checkBatteryTempGate(context)) return false
-            if (!checkBatteryLevelGate(sensesJson)) return false
-            if (!checkPresenceOnlyGate(c)) return false
-            if (!checkDismissalCooldownGate(c)) return false
-            if (!checkOverlayHourlyCapGate(c)) return false
-            if (!checkTimeWindowGate(c, sensesJson)) return false
-
-            return true
+            val sensesJson = runCatching { JSONObject(c.deviceSenses.snapshot()) }.getOrNull()
+            val now = Calendar.getInstance()
+            val batteryPct = liveBatteryPercent(context)
+                .takeIf { it >= 0 } ?: (sensesJson?.optInt("battery", -1) ?: -1)
+            val events = runCatching { CalendarReader(context).upcomingEvents() }.getOrDefault(emptyList())
+            val nowMillis = System.currentTimeMillis()
+            val minutesUntil = events.firstOrNull()
+                ?.let { ((it.beginMillis - nowMillis) / 60_000L).toInt() }
+                ?.coerceAtLeast(0) ?: -1
+            return BriefingInputs(
+                hour = now.get(Calendar.HOUR_OF_DAY),
+                minute = now.get(Calendar.MINUTE),
+                dayOfWeek = now.get(Calendar.DAY_OF_WEEK),
+                batteryPercent = batteryPct,
+                charging = sensesJson?.optBoolean("charging", false) ?: false,
+                screenOn = (sensesJson?.optString("screen", "off") ?: "off").equals("on", ignoreCase = true),
+                foregroundApp = sensesJson?.optString("foreground_app", "") ?: "",
+                musicPlaying = sensesJson?.optBoolean("music_playing", false) ?: false,
+                calendarEvents = events.map { formatEvent(it) },
+                nextEventMinutesUntil = minutesUntil,
+                unreadCount = runCatching { NotificationDigest.unreadCount() }.getOrDefault(0),
+                unreadSenders = runCatching { NotificationDigest.topSenders() }.getOrDefault(emptyList()),
+            )
         }
 
-        // Gate 1: User time windows plus learned nudge hour (MemoryContext) & Late-Night Guardian
-        private suspend fun checkTimeWindowGate(c: AppContainer, sensesJson: JSONObject?): Boolean {
-            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-            val screen = sensesJson?.optString("screen", "off") ?: "off"
-            val isScreenOn = screen.equals("on", ignoreCase = true)
+        /** Evaluates the hard gates, then the smart timing gate. */
+        suspend fun evaluateGates(context: Context, inputs: BriefingInputs): TimingGate {
+            val c = container(context)
+            if (!inputs.screenOn) return TimingGate(false, "screen_off", "screen is off")
+            if (!checkBatteryTempGate(context)) return TimingGate(false, "battery_hot", "battery temperature too high")
+            if (!checkCriticalBatteryGate(inputs)) return TimingGate(false, "critical_battery", "battery too low to wake")
+            if (!checkPresenceOnlyGate(c)) return TimingGate(false, "presence_only", "presenceOnly kill switch active")
+            if (!checkDismissalCooldownGate(c)) return TimingGate(false, "dismissal_cooldown", "dismissal cooldown active")
+            if (!checkOverlayHourlyCapGate(c)) return TimingGate(false, "overlay_cap", "overlay hourly cap reached")
 
-            // 1a. Real-world Late-Night Circadian Guardian (11 PM - 4:59 AM)
-            // If the user is actively using the device late at night, Shiina must intervene!
-            if ((hour >= 23 || hour < 5) && isScreenOn) {
-                AppDebugServer.log("LOOP", "Time gate passed: late-night active phone usage detected (hour=$hour, screen=on). Shiina will intervene to guard sleep routine.")
-                return true
-            }
-
-            // 1a2. Binge-scroll Guardian: entertainment minutes over threshold + screen on.
-            // Forces a pass like the late-night guardian so she can call out rotting.
-            if (isScreenOn) {
-                val bingeMinutes = bingeMinutesIfDue(c)
-                if (bingeMinutes != null) {
-                    AppDebugServer.log("LOOP", "Time gate passed: binge-scroll detected (${bingeMinutes}min entertainment today >= ${BINGE_THRESHOLD_MINUTES}min). Shiina will intervene.")
-                    return true
-                }
-            }
-
-            // 1b. Learned nudge hour check
             val learnedHour = runCatching {
                 c.database.baselineDao().get(MemoryContext.KEY_NUDGE_HOUR)?.average?.toInt()
             }.getOrNull()
-            if (learnedHour != null && hour == learnedHour) {
-                AppDebugServer.log("LOOP", "Time gate passed: matches learned nudge hour ($learnedHour:00)")
-                return true
-            }
+            val bedtime = runCatching { c.database.memoryFactDao().get("bedtime")?.value }.getOrNull()
+            val activeWindow = runCatching { c.database.memoryFactDao().get("active_window")?.value }.getOrNull()
+            // Respect the binge-nag cooldown: only surface binge minutes when a nag is actually due.
+            val bingeMinutes = bingeMinutesIfDue(c) ?: 0
 
-            // 1c. Learned bedtime fact (suppress if in bedtime and screen is off, but intervened above if screen was on)
-            val bedtime = runCatching {
-                c.database.memoryFactDao().get("bedtime")?.value
-            }.getOrNull()
-            if (!bedtime.isNullOrBlank()) {
-                val bedHour = bedtime.substringBefore(":").trim().toIntOrNull()
-                if (bedHour != null) {
-                    val inBed = if (bedHour >= 12) hour >= bedHour || hour < 7 else hour in bedHour..7
-                    if (inBed) {
-                        AppDebugServer.log("LOOP", "Gate rejected: bedtime active ($bedtime, hour=$hour)")
-                        return false
-                    }
-                }
-            }
-
-            // 1d. Learned active_window fact (e.g. "09:00-22:00")
-            val activeWindow = runCatching {
-                c.database.memoryFactDao().get("active_window")?.value
-            }.getOrNull()
-            if (!activeWindow.isNullOrBlank()) {
-                val parts = activeWindow.split("-")
-                if (parts.size == 2) {
-                    val start = parts[0].substringBefore(":").trim().toIntOrNull()
-                    val end = parts[1].substringBefore(":").trim().toIntOrNull()
-                    if (start != null && end != null) {
-                        val inWindow = if (start <= end) hour in start..end else hour >= start || hour <= end
-                        if (!inWindow) {
-                            AppDebugServer.log("LOOP", "Gate rejected: outside active_window ($activeWindow, hour=$hour)")
-                            return false
-                        }
-                        return true
-                    }
-                }
-            }
-
-            // 1e. Default user active window: 8 AM to 10 PM
-            if (hour !in 8..22) {
-                AppDebugServer.log("LOOP", "Gate rejected: outside default active window 8-22 (currentHour=$hour)")
-                return false
-            }
-            return true
-        }
-
-        // Gate 2: Screen must be on (DeviceSenses snapshot screen field)
-        private fun checkScreenGate(sensesJson: JSONObject?): Boolean {
-            val screen = sensesJson?.optString("screen", "off") ?: "off"
-            if (!screen.equals("on", ignoreCase = true)) {
-                AppDebugServer.log("LOOP", "Gate rejected: screen is $screen (must be 'on')")
-                return false
-            }
-            return true
+            return BriefingContextBuilder.resolveTimingGate(
+                inputs = inputs,
+                learnedHour = learnedHour,
+                activeWindow = activeWindow,
+                bedtime = bedtime,
+                bingeMinutes = bingeMinutes,
+                bingeThresholdMinutes = BINGE_THRESHOLD_MINUTES,
+                lastMorningBriefMillis = markerMillis(c, KEY_LAST_MORNING_BRIEF),
+                lastPostWorkBriefMillis = markerMillis(c, KEY_LAST_POSTWORK_BRIEF),
+                nowMillis = System.currentTimeMillis(),
+            )
         }
 
         // Gate 3: Battery temp under ~40C via BatteryManager EXTRA_TEMPERATURE
@@ -285,15 +262,36 @@ class ProactiveLoop : BroadcastReceiver() {
             return true
         }
 
-        // Gate 4: Skip on low battery
-        private fun checkBatteryLevelGate(sensesJson: JSONObject?): Boolean {
-            val lowBattery = sensesJson?.optBoolean("low_battery", false) ?: false
-            val batteryPct = sensesJson?.optInt("battery", -1) ?: -1
-            if (lowBattery || (batteryPct in 0..15)) {
-                AppDebugServer.log("LOOP", "Gate rejected: low battery ($batteryPct%, lowFlag=$lowBattery)")
+        // Battery: only a truly critical charge is skipped; 11-20% becomes a briefing trigger instead.
+        private fun checkCriticalBatteryGate(inputs: BriefingInputs): Boolean {
+            if (inputs.batteryPercent in 0..CRITICAL_BATTERY_SKIP_PERCENT) {
+                AppDebugServer.log("LOOP", "Gate rejected: critical battery (${inputs.batteryPercent}%)")
                 return false
             }
             return true
+        }
+
+        private fun liveBatteryPercent(context: Context): Int = runCatching {
+            context.getSystemService(BatteryManager::class.java)
+                ?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+        }.getOrDefault(-1)
+
+        private suspend fun markerMillis(c: AppContainer, key: String): Long =
+            runCatching { c.database.memoryFactDao().get(key)?.updatedMillis ?: 0L }.getOrDefault(0L)
+
+        /** Stamps a once-a-day briefing marker (0.2 confidence: invisible to recall). */
+        private suspend fun stampMarker(c: AppContainer, key: String) {
+            runCatching {
+                c.database.memoryFactDao().upsert(
+                    MemoryFact(key, "briefed", 0.2, "system", System.currentTimeMillis()),
+                )
+            }
+        }
+
+        private fun formatEvent(e: com.shiina.mobile.observation.CalendarEvent): String {
+            val whenText = if (e.allDay) "all-day" else SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(e.beginMillis))
+            val loc = if (e.location.isNotBlank()) " @ ${e.location}" else ""
+            return "$whenText ${e.title}$loc"
         }
 
         // Gate 5: Respect presenceOnly kill switch
@@ -363,14 +361,13 @@ class ProactiveLoop : BroadcastReceiver() {
          * Runs the same pipeline as AlarmReceiver.runEveningDecision with source=loop,
          * overlay only if decide returns interrupt true.
          */
-        private suspend fun runDecisionPipeline(context: Context) {
+        private suspend fun runDecisionPipeline(context: Context, inputs: BriefingInputs, gate: TimingGate) {
             val c = container(context)
-            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-            val snapshotStr = runCatching { c.deviceSenses.snapshot() }.getOrDefault("{}")
-            val sensesJson = runCatching { JSONObject(snapshotStr) }.getOrNull()
-            val fgApp = sensesJson?.optString("foreground_app", "") ?: ""
-            val battery = sensesJson?.optInt("battery", -1) ?: -1
-            val isCharging = sensesJson?.optBoolean("charging", false) ?: false
+            val hour = inputs.hour
+
+            val briefingJson = BriefingContextBuilder.build(inputs, gate)
+            AppDebugServer.log("LOOP", "BRIEFING $briefingJson")
+            val briefingBlock = BriefingContextBuilder.promptBlock(inputs, gate)
 
             AppDebugServer.log("LOOP", "Proactive heartbeat tick triggered — delegating situation evaluation to Shiina...")
 
@@ -379,7 +376,7 @@ class ProactiveLoop : BroadcastReceiver() {
             val bingeMinutes = runCatching { c.usageReader.getTodayEntertainmentMinutes() }.getOrDefault(0)
             val bingeBaseline = runCatching { c.baselineUpdater.getEntertainmentBaseline() }.getOrDefault(0)
             val bingeFlag = if (bingeMinutes >= BINGE_THRESHOLD_MINUTES) " (OVER your ${BINGE_THRESHOLD_MINUTES}min binge line — fair game to call out)" else ""
-            val situationPrompt = "[PROACTIVE_SITUATION_CHECK] Live physical senses: current_hour=$hour, battery=$battery%, charging=$isCharging, foreground_app='$fgApp', entertainment_today=${bingeMinutes}min (usual ~${bingeBaseline}min)$bingeFlag. Observe the physical situation yourself. If you determine an authentic check-in, caring intervention (e.g. late night active phone use, binge-scrolling past the line), or timely reminder is right, speak naturally in your own authentic voice. If everything is fine or she should not be disturbed right now, conclude with status DONE and no message."
+            val situationPrompt = "$briefingBlock\n[PROACTIVE_SITUATION_CHECK] Live physical senses: current_hour=$hour, battery=${inputs.batteryPercent}%, charging=${inputs.charging}, foreground_app='${inputs.foregroundApp}', entertainment_today=${bingeMinutes}min (usual ~${bingeBaseline}min)$bingeFlag. Observe the physical situation yourself. If you determine an authentic check-in, caring intervention (e.g. late night active phone use, binge-scrolling past the line), or timely reminder is right, speak naturally in your own authentic voice. If everything is fine or she should not be disturbed right now, conclude with status DONE and no message."
 
             val agentRun = runCatching {
                 agent.runAgentLoopInternal(
@@ -415,6 +412,10 @@ class ProactiveLoop : BroadcastReceiver() {
                 com.shiina.mobile.debug.ChatBus.speak(reply, currentTone, isLateNight)
                 runCatching { c.chatHistory.addShiina(reply) }
                 if (bingeMinutes >= BINGE_THRESHOLD_MINUTES) stampBingeNag(c)
+                when (gate.label) {
+                    "morning_pickup" -> stampMarker(c, KEY_LAST_MORNING_BRIEF)
+                    "post_work_transition" -> stampMarker(c, KEY_LAST_POSTWORK_BRIEF)
+                }
             } else {
                 AppDebugServer.log("LOOP", "Shiina evaluated the situation and autonomously decided no intervention was needed.")
             }

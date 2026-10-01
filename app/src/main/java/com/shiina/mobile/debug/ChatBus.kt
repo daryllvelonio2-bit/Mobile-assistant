@@ -23,6 +23,17 @@ object ChatBus {
     private val _lastUserText = MutableStateFlow<String?>(null)
     val lastUserText: StateFlow<String?> = _lastUserText.asStateFlow()
 
+    /**
+     * True while Shiina's voice is actually playing (clone or system TTS). The push-to-talk
+     * mic (R2) hard-gates on this: she must never be recording her own speech.
+     */
+    private val _speaking = MutableStateFlow(false)
+    val speaking: StateFlow<Boolean> = _speaking.asStateFlow()
+
+    fun setSpeaking(value: Boolean) {
+        _speaking.value = value
+    }
+
     @Volatile
     var stopRequested: Boolean = false
 

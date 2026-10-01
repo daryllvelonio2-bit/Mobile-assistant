@@ -13,8 +13,8 @@ android {
         applicationId = "com.shiina.mobile"
         minSdk = 26
         targetSdk = 35
-        versionCode = 115
-        versionName = "0.111.0"
+        versionCode = 116
+        versionName = "0.112.0"
     }
 
     buildTypes {

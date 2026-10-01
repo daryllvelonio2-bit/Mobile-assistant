@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Quick Settings tile icon. Shares the status-bar orb silhouette: a single even-odd path with the
+  eyes and flat mouth punched through as real holes, so the QS panel's flat monochrome tinting
+  renders the face instead of collapsing to a solid disc.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M12,3a9,9 0 1,0 0,18a9,9 0 1,0 0,-18z M9.4,10.3a1.25,1.25 0 1,0 0,2.5a1.25,1.25 0 1,0 0,-2.5z M14.6,10.3a1.25,1.25 0 1,0 0,2.5a1.25,1.25 0 1,0 0,-2.5z M9.3,15.3h5.4v1.6h-5.4z" />
+</vector>

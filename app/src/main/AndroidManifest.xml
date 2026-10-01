@@ -14,6 +14,9 @@
     <!-- Sleep read via Health Connect. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
 
+    <!-- Phase 1: calendar events for smart contextual briefings. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
     <!-- Alarms + foreground observation + timers. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.SET_ALARM" />
@@ -70,6 +73,16 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".action.ShiinaTileService"
+            android:label="@string/tile_shiina_label"
+            android:icon="@drawable/ic_tile_shiina"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
         <service

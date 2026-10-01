@@ -54,6 +54,8 @@ object PromptAssembler {
             appendLine()
             appendLine(ToolCatalog.TOOLSET_OVERVIEW)
             appendLine()
+            appendLine(P.CAPTURE_ETIQUETTE)
+            appendLine()
         }
 
         val screenRes = container.screenMetrics.toString()
@@ -147,6 +149,16 @@ object PromptAssembler {
         }.getOrDefault("")
         if (proceduralMemories.isNotBlank()) {
             appendLine(proceduralMemories)
+            appendLine()
+        }
+
+        // 5. Journal — recent captured notes so recall works without a tool call (Phase 3).
+        runCatching {
+            val notes = container.knowledgeNoteDao.recent(8)
+            val topics = container.knowledgeNoteDao.topics()
+            com.shiina.mobile.data.db.KnowledgeNote.buildPromptBlock(notes, topics)
+        }.getOrDefault("").takeIf { it.isNotBlank() }?.let {
+            appendLine(it)
             appendLine()
         }
 

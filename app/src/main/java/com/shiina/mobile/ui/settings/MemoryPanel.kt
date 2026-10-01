@@ -61,6 +61,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.shiina.mobile.data.db.KnowledgeNote
 import com.shiina.mobile.data.db.MemoryFact
 import com.shiina.mobile.debug.DebugTalkService
 import com.shiina.mobile.theme.ShiinaMotion
@@ -71,6 +72,9 @@ import com.shiina.mobile.ui.components.ShiinaDivider
 import com.shiina.mobile.ui.components.ShiinaEmptyState
 import com.shiina.mobile.ui.components.ShiinaSectionHeader
 import com.shiina.mobile.ui.components.ShiinaStat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Memory — everything Shiina holds onto, inspectable and editable.
@@ -83,6 +87,7 @@ fun MemoryPanel(
     val facts by viewModel.facts.collectAsState()
     val status by viewModel.memoryStatus.collectAsState()
     val digests by viewModel.digests.collectAsState()
+    val notes by viewModel.notes.collectAsState()
     val fullContext by viewModel.fullContext.collectAsState()
     val context = LocalContext.current
     var armed by remember { mutableStateOf(false) }
@@ -193,6 +198,39 @@ fun MemoryPanel(
                         onDelete = { viewModel.deleteFact(fact.key) },
                     )
                 }
+            }
+        }
+
+        // ---- Journal (Phase 3) ----
+        Spacer(Modifier.height(28.dp))
+        ShiinaSectionHeader(
+            title = "Journal",
+            eyebrow = "Notes",
+            subtitle = if (notes.isEmpty()) "Ideas, plans and decisions you share" else "${notes.size} note${if (notes.size == 1) "" else "s"} captured",
+            icon = Icons.Default.Psychology,
+        )
+        Spacer(Modifier.height(10.dp))
+        if (notes.isEmpty()) {
+            ShiinaEmptyState(
+                icon = Icons.Default.Psychology,
+                title = "No notes yet",
+                body = "Ideas, plans, tasks and decisions you mention in chat surface here, grouped by topic.",
+            )
+        } else {
+            notes.groupBy { it.topic }.toList().sortedBy { it.first }.forEach { (topic, topicNotes) ->
+                Text(
+                    text = topic,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    topicNotes.forEach { note ->
+                        NoteCard(note = note, onDelete = { viewModel.deleteNote(note.id) })
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
             }
         }
 
@@ -376,6 +414,69 @@ fun MemoryPanel(
         }
 
         Spacer(Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun NoteCard(
+    note: KnowledgeNote,
+    onDelete: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(ShiinaShapes.Large)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), ShiinaShapes.Large)
+            .padding(14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            KindChip(note.kind)
+            Spacer(Modifier.weight(1f))
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onDelete),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete note",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = note.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = "${SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(note.createdMillis))} · ${note.source}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun KindChip(kind: String) {
+    Box(
+        modifier = Modifier
+            .clip(ShiinaShapes.Full)
+            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f))
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(
+            text = kind,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
     }
 }
 

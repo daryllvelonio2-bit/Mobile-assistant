@@ -79,13 +79,16 @@ class VoiceCloneEngine(private val context: Context) {
     }
 
     /** Synthesizes [text] in the cloned voice, flushing in-progress speech. */
-    fun speak(text: String, speed: Float = 1.0f) {
-        if (text.isBlank()) return
+    fun speak(text: String, speed: Float = 1.0f, onComplete: (() -> Unit)? = null) {
+        if (text.isBlank()) {
+            onComplete?.invoke()
+            return
+        }
         executor.submit {
-            val engine = if (ensureLoaded()) tts.get() else null
-            val ref = loadReference()
-            if (engine == null || ref == null) return@submit
             try {
+                val engine = if (ensureLoaded()) tts.get() else null
+                val ref = loadReference()
+                if (engine == null || ref == null) return@submit
                 stopPlayback()
                 stopFlag = false
                 // Sentence-chunked streaming: first sentence plays as soon as it's
@@ -112,6 +115,8 @@ class VoiceCloneEngine(private val context: Context) {
                 AppDebugServer.log("VOICE_CLONE", "Spoke $totalSamples samples @${rate}Hz (synth ${totalSynthMs}ms, ${chunks.size} chunks)")
             } catch (e: Exception) {
                 AppDebugServer.log("VOICE_CLONE", "Synthesis failed: ${e.message}")
+            } finally {
+                onComplete?.invoke()
             }
         }
     }

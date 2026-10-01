@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
@@ -44,6 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.shiina.mobile.theme.ShiinaShapes
 import com.shiina.mobile.ui.components.ShiinaDivider
 
@@ -65,6 +68,10 @@ fun PermissionSection(
     val notification = hasNotificationAccess(context)
     val a11y = hasAccessibilityAccess(context)
     val battery = isIgnoringBatteryOptimizations(context)
+    val calendar = hasCalendarAccess(context)
+    val calendarLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { refreshTick++ }
 
     Column(modifier = modifier.fillMaxWidth()) {
         PermissionItemRow(
@@ -118,6 +125,15 @@ fun PermissionSection(
             icon = Icons.Default.BatteryChargingFull,
             granted = battery,
             onOpen = { openBatterySettings(context) },
+        )
+        ShiinaDivider()
+
+        PermissionItemRow(
+            title = "Calendar",
+            description = "Reads today's events for timely briefings",
+            icon = Icons.Default.CalendarMonth,
+            granted = calendar,
+            onOpen = { calendarLauncher.launch(android.Manifest.permission.READ_CALENDAR) },
         )
     }
 }
