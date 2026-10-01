@@ -50,7 +50,7 @@ fixes are committed yet.
 | 1 | FIXED (device-verified) | HIGH | Security | ADB debug receiver exported with no permission — any app can inject chat + overwrite API keys | `AdbTalkReceiver.kt`, `AndroidManifest.xml` |
 | 2 | FIXED (device-verified) | HIGH | Security/Cost | Proactive-loop receiver exported — any app can force LLM heartbeat ticks | `AndroidManifest.xml:132-133` |
 | 3 | FIXED (device-verified) | MEDIUM | Correctness | MediaProjection used without a registered `MediaProjection.Callback` (breaks capture on Android 14+, targetSdk 35) | `ScreenshotTaker.kt:41-45,88` |
-| 4 | OPEN | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:479-480`, `ToolDispatcher.kt:577-578` |
+| 4 | FIXED (device-verified) | MEDIUM | Correctness | Procedural-memory usage counters mutated but never persisted — reset every restart | `ProceduralMemoryStore.kt:477-493`, `ToolDispatcher.kt:577` |
 | 5 | OPEN | MEDIUM | Privacy | Full prompts / full model+API responses logged to logcat in all builds | `AgentEngine.kt:360-367,444`, `GeminiProvider.kt:71-75,94` |
 | 6 | OPEN | MEDIUM | Hygiene/Secrets | `.env` is tracked in git; `.gitignore` does not ignore it | `.env`, `.gitignore` |
 | 7 | OPEN | MEDIUM | Rule 10 | Hardcoded `Color` values in Compose UI and notifications | `ShiinaVisuals.kt:115-146,350-357`, `DebugTalkService.kt:331`, `MainActivity.kt:414-415` |
@@ -294,8 +294,23 @@ non-suspend reader while writers hold the coroutine `mutex` — that is also a l
 **Verify:** `GET_PROCEDURE` twice, force-stop the app, relaunch and `GET_PROCEDURE` again → `usageCount`
 reflects the accumulated count rather than resetting.
 
-**Re-verified 2026-10-01: STILL OPEN.** `ProceduralMemoryStore.kt:479` and `ToolDispatcher.kt:577` unchanged.
-Developer task `t_94c90291`.
+**FIXED 2026-10-01** (task `t_94c90291`, commit on `agents/autodev`). `getProcedureDetails` is now a
+`suspend fun` that runs `mutex.withLock { … ; saveToDiskLocked() }` via a new private
+`recordUsageLocked(entry)` helper (no more mutation from a `@Synchronized` non-suspend reader).
+A new `suspend fun ProceduralMemoryStore.recordUsage(key)` persists the bump, and
+`ToolDispatcher.executeProcedureSteps` now calls `recordUsage(entry.id)` instead of mutating the
+entry in memory.
+
+Verified two ways:
+1. **JVM regression tests** (`app/src/test/java/com/shiina/mobile/memory/ProceduralMemoryPersistenceTest.kt`,
+   4 tests, 0 failures): two `GET_PROCEDURE` calls then a *fresh store instance over the same storage
+   dir* → `usage_count` accumulates and is read back from `learned_procedures.json`. RED check with the
+   `saveToDiskLocked()` line removed reproduced the reported bug exactly (`expected:<3> but was:<1>`
+   and `expected:<2> but was:<1>`).
+2. **Waydroid device run** (API 33 x86_64, debug APK): `GET_PROCEDURE proc_clock_alarm` twice in pid
+   `5440` → `usage_count=2` then `usage_count=3`; `am force-stop` (process gone) → relaunch as pid
+   `5569` → `GET_PROCEDURE` again → `usage_count=4` (accumulated, **not** reset). Pre-fix the post-restart
+   call would have logged `2`.
 
 ---
 

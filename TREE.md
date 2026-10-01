@@ -54,5 +54,6 @@ Mobile-assistant/
                 │   └── settings/   # Settings ViewModel/UI, MemoryPanel (status, facts viewer, digests, forget all)
                 └── work/           # BaselineWorker (runs NightlyReflection, charger-idle periodic)
     └── src/test/java/com/shiina/mobile/ # Pure unit tests (SystemContextAndSkillsTest: >10k pure system context, playbooks, parsing, scenario detection)
+                                         #   memory/ (ProceduralMemoryPersistenceTest: usage_count/last_used survive a simulated restart)
 ```
 *(Note: Update this tree immediately whenever files, modules, or directories are added, removed, or restructured.)*

@@ -574,8 +574,8 @@ object ToolDispatcher {
             completed++
         }
 
-        entry.usageCount++
-        entry.lastUsed = System.currentTimeMillis()
+        // Persist the usage bump so usage-based ranking survives a process restart.
+        container.proceduralMemoryStore.recordUsage(entry.id)
         com.shiina.mobile.debug.AppDebugServer.log("TOOL_DISPATCH", "Procedure '${entry.title}' completed successfully ($completed/${entry.steps.size} steps)")
 
         return ToolResult(

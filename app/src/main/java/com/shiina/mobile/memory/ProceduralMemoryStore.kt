@@ -471,25 +471,53 @@ class ProceduralMemoryStore(
     }
 
     /**
-     * Returns a detailed execution guide for a single procedure.
+     * Bumps and persists a procedure's usage counters. Must be called while holding [mutex].
+     * Previously callers mutated the entry in memory only, so usage_count/last_used were
+     * silently reset to the last persisted values on every process restart.
      */
-    @Synchronized
-    fun getProcedureDetails(key: String): String {
-        val entry = getProcedure(key) ?: return "Procedure '$key' not found in procedural memory."
+    private fun recordUsageLocked(entry: ProcedureEntry) {
         entry.usageCount++
         entry.lastUsed = System.currentTimeMillis()
+        saveToDiskLocked()
+        AppDebugServer.log("PROCEDURAL_MEMORY", "Recorded usage for '${entry.title}' -> usage_count=${entry.usageCount} (persisted)")
+    }
 
-        val sb = StringBuilder()
-        sb.append("### Procedure: \"${entry.title}\" (id: ${entry.id})\n")
-        sb.append("- App: ${entry.appLabel} (${entry.appPackage})\n")
-        sb.append("- Goal: ${entry.intentGoal}\n")
-        if (entry.shortcutTip.isNotBlank()) sb.append("- Optimization Note: ${entry.shortcutTip}\n")
-        sb.append("- Steps (${entry.steps.size}):\n")
-        entry.steps.forEach { s ->
-            val dStr = if (s.details.isNotBlank()) " — ${s.details}" else ""
-            sb.append("  ${s.stepNumber}. [${s.action}] target=\"${s.target}\"$dStr\n")
+    /**
+     * Records a successful use of a procedure and persists the bump to disk.
+     * Returns true when the procedure existed.
+     */
+    suspend fun recordUsage(key: String): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val entry = getProcedure(key) ?: return@withContext false
+            recordUsageLocked(entry)
+            true
         }
-        return sb.toString().trim()
+    }
+
+    /**
+     * Returns a detailed execution guide for a single procedure, recording and persisting the
+     * usage bump so it survives a process restart.
+     *
+     * NOTE: this used to be a `@Synchronized` non-suspend reader that mutated the shared entry
+     * outside the coroutine [mutex] — do not reintroduce that; all mutations must take [mutex].
+     */
+    suspend fun getProcedureDetails(key: String): String = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val entry = getProcedure(key) ?: return@withContext "Procedure '$key' not found in procedural memory."
+            recordUsageLocked(entry)
+
+            val sb = StringBuilder()
+            sb.append("### Procedure: \"${entry.title}\" (id: ${entry.id})\n")
+            sb.append("- App: ${entry.appLabel} (${entry.appPackage})\n")
+            sb.append("- Goal: ${entry.intentGoal}\n")
+            if (entry.shortcutTip.isNotBlank()) sb.append("- Optimization Note: ${entry.shortcutTip}\n")
+            sb.append("- Steps (${entry.steps.size}):\n")
+            entry.steps.forEach { s ->
+                val dStr = if (s.details.isNotBlank()) " — ${s.details}" else ""
+                sb.append("  ${s.stepNumber}. [${s.action}] target=\"${s.target}\"$dStr\n")
+            }
+            sb.toString().trim()
+        }
     }
 
     /**

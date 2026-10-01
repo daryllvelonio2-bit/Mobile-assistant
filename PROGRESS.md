@@ -1,11 +1,18 @@
 # Project Progress (`PROGRESS.md`)
 
 ## Status Overview
-- **Current Phase:** Master Plan: Personal Cognitive Companion & Usability Evolution (v0.106.0)
+- **Current Phase:** Master Plan: Personal Cognitive Companion & Usability Evolution (v0.107.0)
 - **Last Updated:** 2026-10-01
 - **Active Deliverables:** .env, agent.md, BUILD_PLAN.md, STACK_DECISION.md, TREE.md, PROGRESS.md, decision package, observation package, action package, character package (`CharacterMode`, `CharacterController`, `CharacterOverlayService`) + character UI (`CharacterViewModel`, `CharacterPanel`).
 
 ## Log of Updates
+- **2026-10-01 — Correctness: persist procedural-memory usage counters (AUDIT finding #4, task `t_94c90291`):**
+  - **Bug:** `ProceduralMemoryStore.getProcedureDetails` bumped `entry.usageCount++` / `entry.lastUsed` and returned **without** `saveToDiskLocked()`, and `ToolDispatcher.executeProcedureSteps` did the same after a successful replay. Every other mutator persisted, so `usage_count`/`last_used` silently reset to the last written values on each process restart and any future usage-based ranking/optimization read wrong data.
+  - **Fix:** added a private `recordUsageLocked(entry)` that bumps and calls `saveToDiskLocked()`; `getProcedureDetails` is now a `suspend fun` running `mutex.withLock { … }` (it was a `@Synchronized` non-suspend reader mutating shared state outside the coroutine mutex — the lock-discipline half of the finding); new `suspend fun recordUsage(key): Boolean` persists the bump for the replay path, and `executeProcedureSteps` now calls `recordUsage(entry.id)` instead of mutating the entry in memory. `recordUsageLocked` also logs `[PROCEDURAL_MEMORY] Recorded usage for '<title>' -> usage_count=N (persisted)`.
+  - **Verified — JVM regression tests (`app/src/test/java/com/shiina/mobile/memory/ProceduralMemoryPersistenceTest.kt`, 4 tests, 0 failures):** two `GET_PROCEDURE` calls, then a *fresh store instance over the same storage dir* (process-restart simulation) → `usage_count` accumulates and is read back from `learned_procedures.json`; `recordUsage` covered too. A controlled RED check (temporarily removing the `saveToDiskLocked()` call) reproduced the exact reported bug: `expected:<3> but was:<1>` and `expected:<2> but was:<1>`.
+  - **Verified — Waydroid (Android 13 / API 33, x86_64, debug APK):** `GET_PROCEDURE proc_clock_alarm` twice in pid `5440` → `usage_count=2` then `usage_count=3`; `am force-stop` (process confirmed gone) → relaunch as pid `5569` → `GET_PROCEDURE` again → `usage_count=4` — accumulated, **not** reset (pre-fix the post-restart call would have logged `2`).
+  - Installation note: the Waydroid test used a throwaway build with `x86_64` temporarily added to `ndk.abiFilters`; the committed artifact is arm64-only again.
+  - `AUDIT.md` finding #4 marked **FIXED (device-verified)**. Version advanced to **0.107.0** (code 111).
 - **2026-10-01 — Correctness: register `MediaProjection.Callback` before capture (AUDIT finding #3, task `t_ad34b7f4`):**
   - **Bug:** `ScreenshotTaker.setProjection` stored the `MediaProjection` and `grabFrame` called `mp.createVirtualDisplay(...)`, but `registerCallback(...)` was never called. With `targetSdk = 35`, Android 14+ requires a callback registered before `createVirtualDisplay`; without it the system throws/refuses and screenshots silently degrade to the accessibility fallback or nothing.
   - **Fix:** `setProjection` now registers a `MediaProjection.Callback` on the main looper (`Handler(Looper.getMainLooper())`) *before* storing the projection; the callback is held in `projectionCallback`, and `release()` unregisters it before stopping the projection. `onStop()` calls `release()` so a system-initiated teardown (user taps **Stop** in the projection dialog) drops the dead projection instead of reusing it. `setProjection`/`release` are now `@Synchronized`.
