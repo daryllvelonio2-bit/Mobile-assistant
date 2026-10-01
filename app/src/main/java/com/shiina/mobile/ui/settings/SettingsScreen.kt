@@ -85,6 +85,8 @@ fun SettingsScreen(
 ) {
     val screenshot by viewModel.screenshotEnabled.collectAsState()
     val voiceTts by viewModel.voiceTtsEnabled.collectAsState()
+    val notificationTriage by viewModel.notificationTriageEnabled.collectAsState()
+    val notificationSummarization by viewModel.notificationSummarizationEnabled.collectAsState()
     val hour by viewModel.alarmHour.collectAsState()
     val minute by viewModel.alarmMinute.collectAsState()
     val geminiKeys by viewModel.geminiKeys.collectAsState()
@@ -335,6 +337,43 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::toggleVoiceTts,
                 icon = Icons.Default.RecordVoiceOver,
                 accent = MaterialTheme.colorScheme.tertiary,
+            )
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        // ---------- NOTIFICATIONS & PRIVACY ----------
+        ShiinaSectionHeader(
+            title = "Notifications & privacy",
+            eyebrow = "Alerts",
+            subtitle = "On-device triage by default — text only leaves the device if you opt in",
+            icon = Icons.Default.NotificationsActive,
+        )
+        Spacer(Modifier.height(4.dp))
+        ShiinaCard(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                horizontal = 16.dp,
+                vertical = 4.dp,
+            ),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        ) {
+            ShiinaToggleRow(
+                title = "Notification digest",
+                description = "Sorts alerts on-device so \"what did I miss?\" works. Nothing leaves the phone.",
+                checked = notificationTriage,
+                onCheckedChange = viewModel::toggleNotificationTriage,
+                icon = Icons.Default.NotificationsActive,
+            )
+            ShiinaDivider()
+            ShiinaToggleRow(
+                title = "Send notification text to model",
+                description = "Off by default. When on, alert titles and bodies are sent to your model with each request.",
+                checked = notificationSummarization,
+                onCheckedChange = viewModel::toggleNotificationSummarization,
+                icon = Icons.Default.Lock,
+                accent = if (notificationSummarization) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.secondary,
             )
         }
 

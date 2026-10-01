@@ -45,7 +45,9 @@ Mobile-assistant/
                 │                   #   ProceduralMemoryStore (app navigation workflows, macro memory, step pruning & optimization),
                 │                   #   MemoryCompactor, MemoryConsolidator, NightlyReflection
                 ├── observation/    # Foreground observation service, ScreenMetrics (resolution learner), ScreenshotTaker,
-                │                   #   MusicTracker (MediaSession, broadcasts), MusicNotificationListener, MemoryOutcomes, DeviceSenses
+                │                   #   MusicTracker (MediaSession, broadcasts), MusicNotificationListener (delegates to triage),
+                │                   #   NotificationTriageEngine (R4 on-device triage/digest; text sent only if opted in), NotificationDigest,
+                │                   #   MemoryOutcomes, DeviceSenses
                 ├── theme/          # Material 3 Theme, Colors, and Typography
                 ├── ui/
                 │   ├── character/  # Character ViewModel and M3 control panel
@@ -56,5 +58,6 @@ Mobile-assistant/
                 └── work/           # BaselineWorker (runs NightlyReflection, charger-idle periodic)
     └── src/test/java/com/shiina/mobile/ # Pure unit tests (SystemContextAndSkillsTest: >10k pure system context, playbooks, parsing, scenario detection)
                                          #   memory/ (ProceduralMemoryPersistenceTest: usage_count/last_used survive a simulated restart)
+                                         #   observation/ (NotificationTriageEngineTest: promptBlock leaks no notification title/text unless opted in)
 ```
 *(Note: Update this tree immediately whenever files, modules, or directories are added, removed, or restructured.)*

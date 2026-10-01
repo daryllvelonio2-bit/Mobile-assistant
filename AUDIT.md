@@ -37,6 +37,7 @@ Finding status:
 - **#5 — FIXED (device-verified 2026-10-01, task `t_9833a73f`)** — see finding #5 for evidence.
 - **#6 — FIXED (git-verified 2026-10-01, task `t_3690dae3`)** — see finding #6 for evidence.
 - **#7, #8–#17 — OPEN** (no working-tree change addresses them).
+- **N1 — FIXED (device-verified 2026-10-01, task `t_61a50116`)** — see finding N1 for evidence.
 
 New findings from this pass: **N1** (`t_61a50116`), **N2** (`t_8265ae80`),
 **N3** (`t_87cef44f`), **N4** (`t_aa09a8ac`) — details in the *New findings* section below.
@@ -67,7 +68,7 @@ fixes are committed yet.
 | 15 | OPEN | LOW | Observability | Provider loop swallows all exceptions silently | `ProviderRegistry.kt:50` |
 | 16 | OPEN | LOW | Rule 5 planning | Files at 847–1269 lines, approaching the 1500 limit | `DeviceActionController.kt`, `ShiinaAccessibilityService.kt`, `OnboardingScreen.kt` |
 | 17 | OPEN | LOW | Cost | Agent loop has no per-turn cost guard (up to 25 sequential API calls) | `AgentEngine.kt:30,125` |
-| N1 | NEW | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
+| N1 | FIXED (device-verified) | MEDIUM | Privacy | Notification title/text sent to Gemini by default (summarization toggle defaults ON) | `SettingsRepository.kt:152-153`, `PromptAssembler.kt:117-124`, `NotificationTriageEngine.kt:228-256` |
 | N2 | NEW | LOW | Correctness | `ChatBus.speaking` is dead state — the R2 echo gate cannot work | `ChatBus.kt:27-36`, `VoiceInputEngine.kt:84` |
 | N3 | NEW | MEDIUM | Infra | Debug APK is arm64-only; cannot install on x86_64 Waydroid — blocks all device verification | `app/build.gradle.kts:18-20` |
 | N4 | NEW | LOW | Architecture | Duplicate notification stores (`NotificationDigest` + `NotificationTriageEngine`) both retain text | `NotificationDigest.kt:19-52`, `NotificationTriageEngine.kt:50-135`, `MusicNotificationListener.kt` |
@@ -516,6 +517,13 @@ base prompt, and `NotificationTriageEngine.promptBlock()` (`:228-256`) embeds pe
 bodies whenever `summarizationEnabled` is true. On a fresh install, third-party notification content
 (WhatsApp/Gmail/banking) is therefore sent to the cloud model without an explicit opt-in, contradicting R4's
 "only if enabled" intent. **Fix:** default `NOTIF_SUMMARY` to `false`. Developer task `t_61a50116`.
+
+**RESOLVED — verified on device 2026-10-01 (task `t_61a50116`; Waydroid Android 13 / x86_64, debug APK, fresh data via `pm clear`):**
+- The opt-in now defaults **off** (`SettingsRepository.DEFAULT_NOTIFICATION_SUMMARIZATION = false`; `NotificationTriageEngine.summarizationEnabled` also defaults `false`). An additional leak the finding did not name was fixed: `promptBlock()` used to emit the **title** of crucial items even with summarization off — it now emits `[category] Sender` only, and the low-priority digest stays counts/senders.
+- Settings gained a **Notifications & privacy** section with two toggles: *Notification digest* (on-device, default on) and *Send notification text to model* (default off; copy states text leaves the device only when enabled).
+- **Fresh-default:** posted notifications (`adb shell cmd notification post`), then a real chat turn (`send.py`) → `GEMINI_TALK_REQUEST` triage block = `pending pings: N` + `· [message] Waydroid Updater` + `grouped low-priority digest: Shell (4)` + the on-device note; **0** matches for `44821`, `FLASH SALE`, `50% off`, `Do not share`, and the crucial item's title `System update available`.
+- **Opted-in A/B (same queued content):** toggled *Send notification text to model* on in the UI → prompt contained `WireCo — WireTransfer 99887 settled to IBAN DE89` and `Waydroid Updater: System update available — …`; toggled back off → all those strings back to **0**.
+- JVM: `app/src/test/java/com/shiina/mobile/observation/NotificationTriageEngineTest.kt` (4 tests) asserts no title/body with the flag off and both with it on. Version 0.109.0 (code 113).
 
 ### N2. `ChatBus.speaking` is dead state — the R2 echo gate cannot work — LOW (correctness)
 `ChatBus.kt:27-36` declares `_speaking`/`speaking`/`setSpeaking()` and documents that the push-to-talk mic

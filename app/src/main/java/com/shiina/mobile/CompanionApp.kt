@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 class CompanionApp : Application() {
@@ -28,6 +29,7 @@ class CompanionApp : Application() {
         AppDebugServer.log("SYSTEM", "AppContainer initialized successfully")
         runCatching { container.musicTracker.start() }
         runCatching { DebugTalkService.start(this) }
+        observeNotificationTriage()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatching { container.actionExecutor.execute("alarm") }
                 .onFailure { e ->
@@ -39,6 +41,31 @@ class CompanionApp : Application() {
                 }
         }
         scheduleNightlyReflection()
+    }
+
+    /** R4 (Phase 4): keep the context-free triage engine in sync with persisted prefs. */
+    private fun observeNotificationTriage() {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                combine(
+                    container.settingsRepository.notificationTriageEnabled,
+                    container.settingsRepository.notificationSummarizationEnabled,
+                    container.settingsRepository.mutedNotificationPackages,
+                    container.settingsRepository.mutedNotificationCategories,
+                ) { enabled, summarize, packages, categories ->
+                    com.shiina.mobile.observation.NotificationTriageEngine.configure(
+                        enabled = enabled,
+                        summarizationEnabled = summarize,
+                        mutedPackages = packages,
+                        mutedCategories = categories
+                            .mapNotNull { com.shiina.mobile.observation.TriageCategory.fromId(it) }
+                            .toSet(),
+                    )
+                }.collect {}
+            }.onFailure { e ->
+                AppDebugServer.log("TRIAGE", "settings observer failed: ${e.message}")
+            }
+        }
     }
 
     /** Charger-idle nightly pass: memory adaptation, pruning, bedtime learning. */

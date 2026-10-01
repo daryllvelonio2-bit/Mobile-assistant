@@ -31,6 +31,14 @@ class SettingsViewModel(
     val voiceTtsEnabled = settings.voiceTtsEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
 
+    /** R4: on-device notification triage/digest. Defaults ON — nothing leaves the device. */
+    val notificationTriageEnabled = settings.notificationTriageEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** R4 / AUDIT N1: opt-in to send notification title/text to the model. Defaults OFF. */
+    val notificationSummarizationEnabled = settings.notificationSummarizationEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     val onboardingCompleted = settings.onboardingCompleted
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -92,6 +100,14 @@ class SettingsViewModel(
 
     fun toggleVoiceTts(enabled: Boolean) {
         viewModelScope.launch { settings.setVoiceTtsEnabled(enabled) }
+    }
+
+    fun toggleNotificationTriage(enabled: Boolean) {
+        viewModelScope.launch { settings.setNotificationTriageEnabled(enabled) }
+    }
+
+    fun toggleNotificationSummarization(enabled: Boolean) {
+        viewModelScope.launch { settings.setNotificationSummarizationEnabled(enabled) }
     }
 
     fun completeOnboarding() {

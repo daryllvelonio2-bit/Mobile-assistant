@@ -113,6 +113,18 @@ object PromptAssembler {
             appendLine()
         }
 
+        // R4 (Phase 4): grounded notification triage so "what did I miss?" works conversationally.
+        runCatching {
+            if (com.shiina.mobile.observation.NotificationTriageEngine.isEnabled()) {
+                com.shiina.mobile.observation.NotificationTriageEngine.promptBlock()
+            } else {
+                ""
+            }
+        }.getOrDefault("").takeIf { it.isNotBlank() }?.let {
+            appendLine(it)
+            appendLine()
+        }
+
         // 3. Categorized Dynamic Lifelong Learnings & Facts
         val rawMemory = runCatching { container.learnedMemoryManager.readMemory() }.getOrDefault("")
         val allFacts = runCatching { container.memoryStore.allFacts() }.getOrDefault(emptyList())

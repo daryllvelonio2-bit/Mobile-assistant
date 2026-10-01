@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -136,6 +137,51 @@ class SettingsRepository(private val context: Context) {
         context.store.edit { it[Keys.ONBOARDING_COMPLETED] = completed }
     }
 
+    /** R4 (Phase 4): notification triage & digest toggle. */
+    val notificationTriageEnabled: Flow<Boolean> =
+        context.store.data.map { it[Keys.NOTIF_TRIAGE] ?: DEFAULT_NOTIFICATION_TRIAGE }
+
+    suspend fun setNotificationTriageEnabled(enabled: Boolean) {
+        context.store.edit { it[Keys.NOTIF_TRIAGE] = enabled }
+    }
+
+    /**
+     * R4 / AUDIT N1: opt-in to sending (already-truncated) notification title/text
+     * into the model prompt. Defaults to OFF (privacy): on a fresh install only
+     * counts/senders leave the device until the user explicitly enables this in
+     * Settings -> Notifications & privacy.
+     */
+    val notificationSummarizationEnabled: Flow<Boolean> =
+        context.store.data.map { it[Keys.NOTIF_SUMMARY] ?: DEFAULT_NOTIFICATION_SUMMARIZATION }
+
+    suspend fun setNotificationSummarizationEnabled(enabled: Boolean) {
+        context.store.edit { it[Keys.NOTIF_SUMMARY] = enabled }
+    }
+
+    /** R4: per-category mute, keyed by `TriageCategory.id`. */
+    val mutedNotificationCategories: Flow<Set<String>> =
+        context.store.data.map { it[Keys.NOTIF_MUTED_CATS] ?: emptySet() }
+
+    suspend fun toggleMutedNotificationCategory(categoryId: String) {
+        context.store.edit { prefs ->
+            val current = prefs[Keys.NOTIF_MUTED_CATS] ?: emptySet()
+            prefs[Keys.NOTIF_MUTED_CATS] =
+                if (categoryId in current) current - categoryId else current + categoryId
+        }
+    }
+
+    /** R4: per-package mute — muted senders never enter the digest. */
+    val mutedNotificationPackages: Flow<Set<String>> =
+        context.store.data.map { it[Keys.NOTIF_MUTED_PKGS] ?: emptySet() }
+
+    suspend fun toggleMutedNotificationPackage(packageName: String) {
+        context.store.edit { prefs ->
+            val current = prefs[Keys.NOTIF_MUTED_PKGS] ?: emptySet()
+            prefs[Keys.NOTIF_MUTED_PKGS] =
+                if (packageName in current) current - packageName else current + packageName
+        }
+    }
+
     suspend fun setPresenceOnly(enabled: Boolean) {
         context.store.edit { it[Keys.PRESENCE_ONLY] = enabled }
     }
@@ -144,6 +190,12 @@ class SettingsRepository(private val context: Context) {
         const val MODEL_35_FLASH_LITE = "gemini-3.5-flash-lite"
         const val MODEL_31_FLASH_LITE = "gemini-3.1-flash-lite"
         const val DEFAULT_MODEL = MODEL_35_FLASH_LITE
+
+        /** AUDIT N1: sending notification title/text to the model is opt-in. */
+        const val DEFAULT_NOTIFICATION_SUMMARIZATION = false
+
+        /** On-device triage/digest is on by default; nothing leaves the device. */
+        const val DEFAULT_NOTIFICATION_TRIAGE = true
 
         val AVAILABLE_MODELS = listOf(
             MODEL_35_FLASH_LITE,
@@ -165,5 +217,9 @@ class SettingsRepository(private val context: Context) {
         val PROVIDER_ORDER = stringPreferencesKey("provider_order")
         val PRESENCE_ONLY = booleanPreferencesKey("presence_only")
         val GEMINI_MODEL = stringPreferencesKey("gemini_model")
+        val NOTIF_TRIAGE = booleanPreferencesKey("notification_triage_enabled")
+        val NOTIF_SUMMARY = booleanPreferencesKey("notification_summarization_enabled")
+        val NOTIF_MUTED_CATS = stringSetPreferencesKey("notification_muted_categories")
+        val NOTIF_MUTED_PKGS = stringSetPreferencesKey("notification_muted_packages")
     }
 }
