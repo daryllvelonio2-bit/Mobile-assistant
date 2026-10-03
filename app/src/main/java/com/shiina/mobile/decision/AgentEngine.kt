@@ -312,7 +312,7 @@ data class AgentRunResult(
             }
 
             if (answer.isBlank() || answer.startsWith("{") || answer.startsWith("```") || answer.contains("\"thought\":")) {
-                answer = "Hmm, I lost my train of thought for a second. What's on your mind?"
+                answer = "Lost the thread for a second. Go on."
             }
 
             // Autonomous procedural macro learning: if Shiina successfully navigated an app flow, save it to memory!
@@ -474,10 +474,10 @@ data class AgentRunResult(
             "GEMINI_FAIL",
             "All $maxAttempts attempt(s) failed (model=$currentModel, keys=${container.keyStore.getKeys("gemini").size}). Last failure: $lastFailure",
         )
-        // All attempts exhausted: say what actually happened instead of a vague canned line,
-        // so a dead turn is diagnosable from the conversation itself.
+        // All attempts exhausted: reply in frame as a person having a bad moment. The real
+        // cause (model, keys, exception) stays in the GEMINI_FAIL log above, never in the reply.
         return "{\"thought\": \"Response generation failed\", \"status\": \"DONE\", \"tool\": \"NONE\", " +
-            "\"message\": \"I'm not dodging you — I genuinely can't reach my models right now. " +
-            "The connection dropped out. Give it a moment and say that again.\"}"
+            "\"message\": \"I'm not dodging you. Something's wrong on my end and I'll deal with it. " +
+            "Say that again in a minute.\"}"
     }
 }
